@@ -39,6 +39,8 @@ _image_processing_semaphore: asyncio.Semaphore | None = None
 PENDING_TEXT = "⏳ ща напишу..."
 PENDING_MIN_SECONDS = 1.0
 SHORT_MEMORY_MESSAGES = 4
+VISUAL_CONTEXT_WAIT_SECONDS = 3.0
+VISUAL_CONTEXT_POLL_SECONDS = 0.5
 
 
 def _detect_message_type(message: Message) -> str:
@@ -185,6 +187,20 @@ def _build_reply_visual_context(message: Message) -> str | None:
         parts.append(f"caption/context: {context_text[:500]}")
 
     return "\n".join(parts) if parts else "Картинка знакома, но осмысленного описания пока нет."
+
+
+async def _wait_for_reply_visual_context(message: Message) -> str | None:
+    if not _reply_has_visual_file(message):
+        return _build_reply_visual_context(message)
+
+    deadline = time.monotonic() + VISUAL_CONTEXT_WAIT_SECONDS
+    while True:
+        visual_context = _build_reply_visual_context(message)
+        if visual_context is not None:
+            return visual_context
+        if time.monotonic() >= deadline:
+            return None
+        await asyncio.sleep(VISUAL_CONTEXT_POLL_SECONDS)
 
 
 def _format_reply_visual_status(message: Message) -> str:
@@ -502,7 +518,7 @@ async def main() -> None:
             await message.answer("LLM сейчас выключена.")
             return
 
-        visual_context = _build_reply_visual_context(message)
+        visual_context = await _wait_for_reply_visual_context(message)
         if _reply_has_visual_file(message) and visual_context is None:
             await message.answer("Визуальный контекст этой картинки ещё не готов.")
             return
@@ -612,7 +628,7 @@ async def main() -> None:
 
             question = _strip_bot_mention(text_content, bot_info.username)
             if question:
-                visual_context = _build_reply_visual_context(message)
+                visual_context = await _wait_for_reply_visual_context(message)
                 reply_text_context = _build_reply_text_context(message, bot_info.username, bot_info.id)
                 short_memory = _build_short_chat_memory(message.chat.id, message.message_id)
                 if _reply_has_visual_file(message) and visual_context is None:
