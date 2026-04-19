@@ -124,12 +124,19 @@ def _extract_question_or_visual_default(message: Message) -> str:
 def _is_addressed_to_bot(message: Message, bot_username: str | None, bot_id: int) -> bool:
     text = (message.text or message.caption or "").lower()
     username_hit = bool(bot_username and f"@{bot_username.lower()}" in text)
-    reply_hit = bool(
-        message.reply_to_message
-        and message.reply_to_message.from_user
-        and message.reply_to_message.from_user.id == bot_id
-    )
+    reply_hit = _is_reply_to_bot(message, bot_username, bot_id)
     return username_hit or reply_hit
+
+
+def _is_reply_to_bot(message: Message, bot_username: str | None, bot_id: int) -> bool:
+    reply_user = message.reply_to_message.from_user if message.reply_to_message else None
+    if not reply_user:
+        return False
+    if reply_user.id == bot_id:
+        return True
+    if bot_username and reply_user.username:
+        return reply_user.username.lower() == bot_username.lower()
+    return False
 
 
 def _strip_bot_mention(text: str, bot_username: str | None) -> str:
@@ -224,16 +231,37 @@ def _format_reply_visual_status(message: Message) -> str:
     return "\n".join(lines)
 
 
-def _build_question_with_context(question: str, visual_context: str | None) -> str:
-    if not visual_context:
+def _build_reply_text_context(message: Message, bot_username: str | None, bot_id: int) -> str | None:
+    reply = message.reply_to_message
+    if not reply or not _is_reply_to_bot(message, bot_username, bot_id):
+        return None
+    text = (reply.text or reply.caption or "").strip()
+    if not text:
+        return None
+    return text[:1200]
+
+
+def _build_question_with_context(
+    question: str,
+    visual_context: str | None,
+    reply_text_context: str | None = None,
+) -> str:
+    if not visual_context and not reply_text_context:
         return question
-    return (
-        "Пользователь спрашивает в Telegram-чате.\n"
-        "Если вопрос относится к reply-картинке, используй только сохранённый визуальный контекст ниже. "
-        "Не утверждай, что видишь изображение напрямую.\n\n"
-        f"Вопрос: {question}\n\n"
-        f"Визуальный контекст reply-сообщения:\n{visual_context}"
-    )
+    parts = [
+        "Пользователь спрашивает в Telegram-чате.",
+        "Ответь на русском, коротко и по делу.",
+        f"Вопрос пользователя: {question}",
+    ]
+    if reply_text_context:
+        parts.append(f"Сообщение бота, на которое ответил пользователь:\n{reply_text_context}")
+    if visual_context:
+        parts.append(
+            "Если вопрос относится к reply-картинке, используй только сохранённый визуальный контекст ниже. "
+            "Не утверждай, что видишь изображение напрямую.\n"
+            f"Визуальный контекст reply-сообщения:\n{visual_context}"
+        )
+    return "\n\n".join(parts)
 
 
 async def _process_message_image_limited(bot: Bot, message: Message, settings: object) -> None:
@@ -499,15 +527,13 @@ async def main() -> None:
             question = _strip_bot_mention(text_content, bot_info.username)
             if question:
                 visual_context = _build_reply_visual_context(message)
+                reply_text_context = _build_reply_text_context(message, bot_info.username, bot_info.id)
                 if _reply_has_visual_file(message) and visual_context is None:
                     await message.reply("Визуальный контекст этой картинки ещё не готов.")
                     return
-                if "картин" in question.lower() and message.reply_to_message and not visual_context:
-                    await message.reply("Ответь вопросом прямо на картинку или GIF, тогда я проверю визуальную память.")
-                    return
 
                 answer = try_answer_question(
-                    _build_question_with_context(question, visual_context),
+                    _build_question_with_context(question, visual_context, reply_text_context),
                     backend=settings.llm_backend,
                     model=settings.llm_model,
                     endpoint=settings.llm_endpoint,
