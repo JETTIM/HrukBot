@@ -121,17 +121,23 @@ def try_generate_svin_joke(
             {
                 "role": "system",
                 "content": (
-                    "Ты пишешь короткие смешные анекдоты на русском языке. "
-                    "Без оскорблений реальных людей, политики и грязной брани."
+                    "Ты пишешь короткие русские анекдоты с понятной структурой: завязка и панчлайн. "
+                    "Юмор должен быть бытовым, естественным и связным. "
+                    "Без абсурда, случайных предметов, политики, грязной брани и оскорблений реальных людей."
                 ),
             },
             {
                 "role": "user",
-                "content": "Сочини короткий анекдот про свинью. Ответь только текстом анекдота.",
+                "content": (
+                    "Сочини один короткий нормальный анекдот про свинью на русском языке. "
+                    "2-4 предложения. Обязательно должен быть понятный смешной финал. "
+                    "Не используй слова: картофель, мясо, рынок. "
+                    "Ответь только текстом анекдота."
+                ),
             },
         ],
-        "temperature": 0.8,
-        "max_tokens": 220,
+        "temperature": 0.55,
+        "max_tokens": 180,
     }
 
     try:
@@ -150,7 +156,18 @@ def _clean_plain_text(text: str, *, max_chars: int) -> str | None:
     cleaned = _strip_markdown_fence(text).strip().strip('"')
     if not cleaned:
         return None
+    if _looks_like_bad_joke(cleaned):
+        logger.warning("LLM svin joke rejected by simple quality filter")
+        return None
     return cleaned[:max_chars]
+
+
+def _looks_like_bad_joke(text: str) -> bool:
+    lowered = text.lower()
+    banned_fragments = ("картоф", "мяс", "рынд", "рынок")
+    if any(fragment in lowered for fragment in banned_fragments):
+        return True
+    return len(text.split()) < 12
 
 
 def _read_http_error(exc: HTTPError) -> str:
