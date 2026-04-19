@@ -98,8 +98,27 @@ def _should_try_svin_reply(today_messages_count: int) -> bool:
 def _extract_command_args(message: Message) -> str:
     if not message.text:
         return ""
-    parts = message.text.split(maxsplit=1)
+    text = message.text.strip()
+    parts = text.split(maxsplit=1)
+    if not parts:
+        return ""
+    command = parts[0].lower()
+    if command.startswith("/ask"):
+        return parts[1].strip() if len(parts) > 1 else ""
     return parts[1].strip() if len(parts) > 1 else ""
+
+
+def _reply_has_visual_file(message: Message) -> bool:
+    return bool(message.reply_to_message and get_image_file_id(message.reply_to_message))
+
+
+def _extract_question_or_visual_default(message: Message) -> str:
+    question = _extract_command_args(message)
+    if question:
+        return question
+    if _reply_has_visual_file(message):
+        return "что на картинке?"
+    return ""
 
 
 def _is_addressed_to_bot(message: Message, bot_username: str | None, bot_id: int) -> bool:
@@ -381,7 +400,7 @@ async def main() -> None:
         if message.chat.id != settings.allowed_chat_id:
             return
 
-        question = _extract_command_args(message)
+        question = _extract_question_or_visual_default(message)
         if not question:
             await message.answer("Напиши вопрос после команды: /ask что спросить")
             return
@@ -390,7 +409,7 @@ async def main() -> None:
             return
 
         visual_context = _build_reply_visual_context(message)
-        if message.reply_to_message and get_image_file_id(message.reply_to_message) and visual_context is None:
+        if _reply_has_visual_file(message) and visual_context is None:
             await message.answer("Визуальный контекст этой картинки ещё не готов.")
             return
 
@@ -480,8 +499,11 @@ async def main() -> None:
             question = _strip_bot_mention(text_content, bot_info.username)
             if question:
                 visual_context = _build_reply_visual_context(message)
-                if message.reply_to_message and get_image_file_id(message.reply_to_message) and visual_context is None:
+                if _reply_has_visual_file(message) and visual_context is None:
                     await message.reply("Визуальный контекст этой картинки ещё не готов.")
+                    return
+                if "картин" in question.lower() and message.reply_to_message and not visual_context:
+                    await message.reply("Ответь вопросом прямо на картинку или GIF, тогда я проверю визуальную память.")
                     return
 
                 answer = try_answer_question(
