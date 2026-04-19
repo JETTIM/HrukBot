@@ -64,19 +64,36 @@ def try_extract_topics_and_summary(
         ],
         "temperature": 0.3,
         "max_tokens": 5000,
-        "response_format": {"type": "json_object"},
     }
 
     try:
-        raw_content = _call_llama_cpp(endpoint=endpoint, payload=payload, timeout=timeout)
+        raw_content = _call_llama_cpp(
+            endpoint=endpoint,
+            payload={**payload, "response_format": {"type": "json_object"}},
+            timeout=timeout,
+        )
+    except HTTPError as exc:
+        if exc.code not in {400, 422}:
+            logger.exception("LLM topics request failed")
+            return None
+        logger.warning("LLM endpoint rejected response_format, retrying without it")
+        try:
+            raw_content = _call_llama_cpp(endpoint=endpoint, payload=payload, timeout=timeout)
+        except (HTTPError, URLError, TimeoutError, OSError, ValueError, json.JSONDecodeError):
+            logger.exception("LLM topics retry failed")
+            return None
+
+    try:
         parsed = _parse_response_json(raw_content)
         if parsed is None:
+            logger.warning("LLM returned invalid topics JSON shape")
             return None
         topics, summary_lines = parsed
         if not topics or not summary_lines:
+            logger.warning("LLM returned empty topics or summary")
             return None
         return topics, summary_lines
-    except (HTTPError, URLError, TimeoutError, OSError, ValueError, json.JSONDecodeError):
+    except (ValueError, json.JSONDecodeError):
         logger.exception("LLM topics request failed")
         return None
 

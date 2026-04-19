@@ -19,6 +19,7 @@ from app.report import (
 from app.topics import extract_main_topics
 
 MAX_TELEGRAM_MESSAGE_LENGTH = 4096
+logger = logging.getLogger(__name__)
 
 
 def get_previous_day(reference: datetime | None = None) -> date:
@@ -66,6 +67,12 @@ def build_topics_and_summary_lines(
         )
 
     topic_source = build_topics_source(messages)
+    if not settings.use_llm_topics:
+        logger.info("LLM topics disabled; using rule-based topics")
+        topics = extract_main_topics(topic_source, top_k=4)
+        summary_lines = build_discussion_character(stats=stats, topics=topics, user_names=user_names)
+        return topics, summary_lines
+
     if settings.use_llm_topics:
         llm_result = try_extract_topics_and_summary(
             topic_source,
@@ -75,8 +82,10 @@ def build_topics_and_summary_lines(
             timeout=settings.llm_timeout,
         )
         if llm_result is not None:
+            logger.info("LLM topics used")
             return llm_result
 
+    logger.warning("LLM topics fallback used")
     topics = extract_main_topics(topic_source, top_k=4)
     summary_lines = build_discussion_character(stats=stats, topics=topics, user_names=user_names)
     return topics, summary_lines
@@ -117,8 +126,6 @@ async def run_daily_report() -> None:
         level=getattr(logging, settings.log_level.upper(), logging.INFO),
         format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
     )
-    logger = logging.getLogger(__name__)
-
     init_db(settings.db_path)
     bot = Bot(
         token=settings.bot_token,
