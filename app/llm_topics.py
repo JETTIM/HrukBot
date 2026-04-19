@@ -104,6 +104,55 @@ def try_extract_topics_and_summary(
         return None
 
 
+def try_generate_svin_joke(
+    *,
+    backend: str,
+    model: str,
+    endpoint: str,
+    timeout: float,
+) -> str | None:
+    if backend.strip().lower() != "llama_cpp":
+        logger.warning("Unsupported LLM backend: %s", backend)
+        return None
+
+    payload = {
+        "model": model,
+        "messages": [
+            {
+                "role": "system",
+                "content": (
+                    "Ты пишешь короткие смешные анекдоты на русском языке. "
+                    "Без оскорблений реальных людей, политики и грязной брани."
+                ),
+            },
+            {
+                "role": "user",
+                "content": "Сочини короткий анекдот про свинью. Ответь только текстом анекдота.",
+            },
+        ],
+        "temperature": 0.8,
+        "max_tokens": 220,
+    }
+
+    try:
+        joke = _call_llama_cpp(endpoint=endpoint, payload=payload, timeout=timeout)
+    except HTTPError as exc:
+        logger.exception("LLM svin joke request failed: %s", _read_http_error(exc))
+        return None
+    except (URLError, TimeoutError, OSError, ValueError, json.JSONDecodeError):
+        logger.exception("LLM svin joke request failed")
+        return None
+
+    return _clean_plain_text(joke, max_chars=900)
+
+
+def _clean_plain_text(text: str, *, max_chars: int) -> str | None:
+    cleaned = _strip_markdown_fence(text).strip().strip('"')
+    if not cleaned:
+        return None
+    return cleaned[:max_chars]
+
+
 def _read_http_error(exc: HTTPError) -> str:
     try:
         return exc.read().decode("utf-8", errors="replace")

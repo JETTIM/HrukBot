@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import random
 import time
 from datetime import date
 
@@ -12,11 +13,20 @@ from aiogram.types import Message
 
 from app.config import get_settings
 from app.db import close_db, delete_messages_older_than, get_messages_by_day, init_db, save_message
+from app.llm_topics import try_generate_svin_joke
 from app.report import calculate_daily_stats, format_daily_report
 from daily_report import build_topics_and_summary_lines, build_user_names
 
 logger = logging.getLogger(__name__)
 _last_cleanup_ts: float = 0.0
+
+BOT_ROASTS = (
+    "Ну ты и стратег, конечно. GPS по жизни явно в режиме экономии.",
+    "Смело сказано. Не умно, зато уверенно.",
+    "Я бы ответил серьёзно, но ты так красиво подставился.",
+    "Твой запрос принят. Мозг, похоже, пока в очереди на модерацию.",
+    "Ты сегодня особенно убедительно изображаешь загрузочный экран.",
+)
 
 
 def _detect_message_type(message: Message) -> str:
@@ -43,6 +53,30 @@ def _word_count(text: str) -> int:
     return len(text.split()) if text else 0
 
 
+def _is_addressed_to_bot(
+    message: Message,
+    *,
+    bot_id: int,
+    bot_username: str | None,
+    bot_name: str | None,
+) -> bool:
+    text = _extract_text(message).lower()
+    if not text:
+        return False
+    if message.reply_to_message and message.reply_to_message.from_user:
+        if message.reply_to_message.from_user.id == bot_id:
+            return True
+    if bot_username and f"@{bot_username.lower()}" in text:
+        return True
+    if bot_name and bot_name.lower() in text:
+        return True
+    return text.startswith(("бот ", "бот,", "бот!", "бот."))
+
+
+def _build_roast() -> str:
+    return random.choice(BOT_ROASTS)
+
+
 async def main() -> None:
     settings = get_settings()
 
@@ -57,6 +91,7 @@ async def main() -> None:
         token=settings.bot_token,
         default=DefaultBotProperties(parse_mode=settings.bot_parse_mode),
     )
+    bot_info = await bot.get_me()
     dp = Dispatcher()
     router = Router()
 
@@ -88,11 +123,28 @@ async def main() -> None:
         )
         await message.answer(report_text)
 
+    @router.message(Command("svin"))
+    async def on_svin(message: Message) -> None:
+        if message.chat.id != settings.allowed_chat_id:
+            return
+
+        joke = None
+        if settings.use_llm_topics:
+            joke = try_generate_svin_joke(
+                backend=settings.llm_backend,
+                model=settings.llm_model,
+                endpoint=settings.llm_endpoint,
+                timeout=settings.llm_timeout,
+            )
+        if joke is None:
+            joke = "Свинья пришла на собеседование. Её спрашивают: опыт есть? Она говорит: хрю, зато в грязных задачах я как дома."
+        await message.answer(joke)
+
     @router.message()
     async def on_message(message: Message) -> None:
         if message.chat.id != settings.allowed_chat_id:
             return
-        if message.text and message.text.strip().lower().startswith("/stats"):
+        if message.text and message.text.strip().lower().startswith(("/stats", "/svin")):
             return
 
         text_content = _extract_text(message)
@@ -127,6 +179,14 @@ async def main() -> None:
         if now_ts - _last_cleanup_ts >= 3600:
             delete_messages_older_than(7)
             _last_cleanup_ts = now_ts
+
+        if _is_addressed_to_bot(
+            message,
+            bot_id=bot_info.id,
+            bot_username=bot_info.username,
+            bot_name=bot_info.first_name,
+        ):
+            await message.answer(_build_roast())
 
     dp.include_router(router)
 
