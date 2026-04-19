@@ -134,8 +134,10 @@ def _is_reply_to_bot(message: Message, bot_username: str | None, bot_id: int) ->
         return False
     if reply_user.id == bot_id:
         return True
-    if bot_username and reply_user.username:
-        return reply_user.username.lower() == bot_username.lower()
+    if bot_username and reply_user.username and reply_user.username.lower() == bot_username.lower():
+        return True
+    if getattr(reply_user, "is_bot", False):
+        return True
     return False
 
 
@@ -305,6 +307,13 @@ async def main() -> None:
         default=DefaultBotProperties(parse_mode=settings.bot_parse_mode),
     )
     bot_info = await bot.get_me()
+    logger.info(
+        "Bot runtime config: username=@%s id=%s use_llm_topics=%s enable_image_processing=%s",
+        bot_info.username,
+        bot_info.id,
+        settings.use_llm_topics,
+        settings.enable_image_processing,
+    )
     dp = Dispatcher()
     router = Router()
 
@@ -313,6 +322,7 @@ async def main() -> None:
         if message.chat.id != settings.allowed_chat_id:
             return
 
+        pending_message = await message.answer("⏳ ща напишу...")
         today = date.today()
         messages = _get_chat_messages_by_day(today, settings.allowed_chat_id)
         user_names = build_user_names(messages)
@@ -333,13 +343,14 @@ async def main() -> None:
             user_names=user_names,
             title_prefix="📊 На данный момент за",
         )
-        await message.answer(report_text)
+        await pending_message.edit_text(report_text)
 
     @router.message(Command("dead"))
     async def on_dead(message: Message) -> None:
         if message.chat.id != settings.allowed_chat_id:
             return
 
+        pending_message = await message.answer("⏳ ща напишу...")
         today = date.today()
         today_count = len(_get_chat_messages_by_day(today, settings.allowed_chat_id))
         yesterday_count = len(_get_chat_messages_by_day(today - timedelta(days=1), settings.allowed_chat_id))
@@ -357,15 +368,16 @@ async def main() -> None:
                 f"— сегодня: {today_count} сообщений\n"
                 f"— вчера: {yesterday_count} сообщений"
             )
-        await message.answer(text)
+        await pending_message.edit_text(text)
 
     @router.message(Command("time"))
     async def on_time(message: Message) -> None:
         if message.chat.id != settings.allowed_chat_id:
             return
 
+        pending_message = await message.answer("⏳ ща напишу...")
         messages_count = len(_get_chat_messages_by_day(date.today(), settings.allowed_chat_id))
-        await message.answer(
+        await pending_message.edit_text(
             "⏳ Сегодня:\n\n"
             f"— сообщений: {messages_count}\n"
             f"— примерное время: ~{_estimate_minutes(messages_count)} минут"
@@ -376,12 +388,13 @@ async def main() -> None:
         if message.chat.id != settings.allowed_chat_id:
             return
 
+        pending_message = await message.answer("⏳ ща напишу...")
         messages = _get_chat_messages_by_day(date.today(), settings.allowed_chat_id)
         hourly = activity_by_hour(messages)
         peak_hour, peak_count = max(hourly.items(), key=lambda item: item[1])
         quiet_hour, _ = min(hourly.items(), key=lambda item: item[1])
 
-        await message.answer(
+        await pending_message.edit_text(
             "⏰ Пик активности:\n\n"
             f"— {_format_hour_window(peak_hour)} ({peak_count} сообщений)\n\n"
             "📉 Самое тихое время:\n"
@@ -393,6 +406,7 @@ async def main() -> None:
         if message.chat.id != settings.allowed_chat_id:
             return
 
+        pending_message = await message.answer("⏳ ща напишу...")
         messages = _get_chat_messages_by_day(date.today(), settings.allowed_chat_id)
         mood = None
         if settings.use_llm_topics:
@@ -405,13 +419,14 @@ async def main() -> None:
             )
         if mood is None:
             mood = _fallback_mood(len(messages))
-        await message.answer(escape(mood))
+        await pending_message.edit_text(escape(mood))
 
     @router.message(Command("svin"))
     async def on_svin(message: Message) -> None:
         if message.chat.id != settings.allowed_chat_id:
             return
 
+        pending_message = await message.answer("⏳ ща напишу...")
         joke = None
         if settings.use_llm_topics:
             joke = try_generate_svin_joke(
@@ -421,7 +436,9 @@ async def main() -> None:
                 timeout=settings.llm_timeout,
             )
         if joke is not None:
-            await message.answer(escape(joke))
+            await pending_message.edit_text(escape(joke))
+            return
+        await pending_message.edit_text("Не смогла придумать нормальный анекдот.")
 
     @router.message(Command("ask"))
     async def on_ask(message: Message) -> None:
@@ -441,6 +458,7 @@ async def main() -> None:
             await message.answer("Визуальный контекст этой картинки ещё не готов.")
             return
 
+        pending_message = await message.answer("⏳ ща напишу...")
         answer = try_answer_question(
             _build_question_with_context(question, visual_context),
             backend=settings.llm_backend,
@@ -449,23 +467,25 @@ async def main() -> None:
             timeout=settings.llm_timeout,
         )
         if answer is None:
-            await message.answer("Не смогла получить ответ от LLM.")
+            await pending_message.edit_text("Не смогла получить ответ от LLM.")
             return
-        await message.answer(escape(answer))
+        await pending_message.edit_text(escape(answer))
 
     @router.message(Command("visual"))
     async def on_visual(message: Message) -> None:
         if message.chat.id != settings.allowed_chat_id:
             return
 
-        await message.answer(escape(_format_visual_memory()))
+        pending_message = await message.answer("⏳ ща напишу...")
+        await pending_message.edit_text(escape(_format_visual_memory()))
 
     @router.message(Command("seen"))
     async def on_seen(message: Message) -> None:
         if message.chat.id != settings.allowed_chat_id:
             return
 
-        await message.answer(escape(_format_reply_visual_status(message)))
+        pending_message = await message.answer("⏳ ща напишу...")
+        await pending_message.edit_text(escape(_format_reply_visual_status(message)))
 
     @router.message()
     async def on_message(message: Message) -> None:
@@ -523,7 +543,23 @@ async def main() -> None:
             delete_messages_older_than(7)
             _last_cleanup_ts = now_ts
 
-        if settings.use_llm_topics and _is_addressed_to_bot(message, bot_info.username, bot_info.id):
+        addressed_to_bot = _is_addressed_to_bot(message, bot_info.username, bot_info.id)
+        if message.reply_to_message:
+            reply_user = message.reply_to_message.from_user
+            logger.info(
+                "Reply detected: addressed_to_bot=%s use_llm_topics=%s reply_user_id=%s reply_username=%s reply_is_bot=%s",
+                addressed_to_bot,
+                settings.use_llm_topics,
+                reply_user.id if reply_user else None,
+                reply_user.username if reply_user else None,
+                getattr(reply_user, "is_bot", None) if reply_user else None,
+            )
+
+        if addressed_to_bot:
+            if not settings.use_llm_topics:
+                await message.reply("LLM сейчас выключена.")
+                return
+
             question = _strip_bot_mention(text_content, bot_info.username)
             if question:
                 visual_context = _build_reply_visual_context(message)
@@ -532,6 +568,7 @@ async def main() -> None:
                     await message.reply("Визуальный контекст этой картинки ещё не готов.")
                     return
 
+                pending_message = await message.reply("⏳ ща напишу...")
                 answer = try_answer_question(
                     _build_question_with_context(question, visual_context, reply_text_context),
                     backend=settings.llm_backend,
@@ -540,8 +577,10 @@ async def main() -> None:
                     timeout=settings.llm_timeout,
                 )
                 if answer is not None:
-                    await message.reply(escape(answer))
+                    await pending_message.edit_text(escape(answer))
                     return
+                await pending_message.edit_text("Не смогла получить ответ от LLM.")
+                return
 
         today_messages_count = len(_get_chat_messages_by_day(date.today(), settings.allowed_chat_id))
         if settings.use_llm_topics and _should_try_svin_reply(today_messages_count):
