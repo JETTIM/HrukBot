@@ -167,9 +167,10 @@ def format_daily_report(
     topics: Sequence[str],
     character_phrases: Sequence[str] | None = None,
     user_names: Mapping[int, str] | None = None,
+    title_prefix: str = "📊 Итоги за",
 ) -> str:
     """Format daily report in Telegram-friendly text."""
-    lines: list[str] = [f"📊 Итоги за {_format_report_date(report_date)}", ""]
+    lines: list[str] = [f"{title_prefix} {_format_report_date(report_date)}", ""]
     lines.append(f"Всего сообщений: {stats.total_messages}")
     lines.append("")
 

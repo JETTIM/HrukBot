@@ -3,13 +3,18 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from datetime import date
 
 from aiogram import Bot, Dispatcher, Router
 from aiogram.client.default import DefaultBotProperties
+from aiogram.filters import Command
 from aiogram.types import Message
 
 from app.config import get_settings
-from app.db import close_db, delete_messages_older_than, init_db, save_message
+from app.db import close_db, delete_messages_older_than, get_messages_by_day, init_db, save_message
+from app.report import build_discussion_character, calculate_daily_stats, format_daily_report
+from app.topics import extract_main_topics
+from daily_report import build_topics_source, build_user_names
 
 logger = logging.getLogger(__name__)
 _last_cleanup_ts: float = 0.0
@@ -56,9 +61,39 @@ async def main() -> None:
     dp = Dispatcher()
     router = Router()
 
+    @router.message(Command("stats"))
+    async def on_stats(message: Message) -> None:
+        if message.chat.id != settings.allowed_chat_id:
+            return
+
+        today = date.today()
+        day_messages = get_messages_by_day(today)
+        messages = [row for row in day_messages if int(row.get("chat_id", 0)) == settings.allowed_chat_id]
+        user_names = build_user_names(messages)
+
+        stats = calculate_daily_stats(messages)
+        if stats.total_messages == 0:
+            topics = ["Обсуждение пока короткое, выраженные темы не выделяются."]
+            character = ["на текущий момент сообщений почти нет"]
+        else:
+            topics = extract_main_topics(build_topics_source(messages), top_k=4)
+            character = build_discussion_character(stats=stats, topics=topics, user_names=user_names)
+
+        report_text = format_daily_report(
+            report_date=today,
+            stats=stats,
+            topics=topics,
+            character_phrases=character,
+            user_names=user_names,
+            title_prefix="📊 На данный момент за",
+        )
+        await message.answer(report_text)
+
     @router.message()
     async def on_message(message: Message) -> None:
         if message.chat.id != settings.allowed_chat_id:
+            return
+        if message.text and message.text.strip().lower().startswith("/stats"):
             return
 
         text_content = _extract_text(message)
