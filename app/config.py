@@ -23,7 +23,7 @@ class Settings:
 
 
 def get_settings() -> Settings:
-    bot_token = os.getenv("BOT_TOKEN", "535857234:AAEPgX015Xg3EAve7KnHTqDWGygatDikxA0").strip()
+    bot_token = os.getenv("BOT_TOKEN", "").strip()
     if not bot_token:
         raise ValueError("BOT_TOKEN is not set. Create .env from .env.example.")
 
