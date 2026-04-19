@@ -201,7 +201,7 @@ def create_image_event(
     chat_id: int,
     file_id: str,
     created_at: datetime,
-    local_path: str,
+    local_path: str | None,
 ) -> int:
     conn = _require_connection()
     timestamp = created_at.replace(microsecond=0).isoformat(sep=" ")

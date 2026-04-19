@@ -316,7 +316,7 @@ async def main() -> None:
             message_type,
         )
 
-        if get_image_file_id(message) is not None:
+        if settings.enable_image_processing and get_image_file_id(message) is not None:
             asyncio.create_task(process_message_image(bot, message, settings=settings))
 
         global _last_cleanup_ts, _messages_since_svin_reply
@@ -336,10 +336,7 @@ async def main() -> None:
                 timeout=settings.llm_timeout,
             )
             if comment is not None:
-                await message.answer(
-                    escape(comment),
-                    reply_to_message_id=message.message_id,
-                )
+                await message.reply(escape(comment))
                 _messages_since_svin_reply = 0
 
     dp.include_router(router)

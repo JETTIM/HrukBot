@@ -69,6 +69,7 @@ ALLOWED_CHAT_ID=-1001234567890
 BOT_PARSE_MODE=HTML
 DB_PATH=data/bot.sqlite3
 LOG_LEVEL=INFO
+ENABLE_IMAGE_PROCESSING=true
 ```
 
 Примечание:
@@ -243,4 +244,17 @@ sudo systemctl restart telegram-bot
 ```bash
 sudo systemctl stop telegram-bot
 sudo systemctl start telegram-bot
+```
+
+Emergency switch for image processing while keeping the bot and commands alive:
+
+```env
+ENABLE_IMAGE_PROCESSING=false
+```
+
+After changing `.env`:
+
+```bash
+sudo systemctl restart telegram-bot
+sudo journalctl -u telegram-bot -n 100 --no-pager
 ```

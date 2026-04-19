@@ -6,10 +6,15 @@ import tempfile
 from datetime import datetime
 from pathlib import Path
 
-import imagehash
 from aiogram import Bot
 from aiogram.types import Message
-from PIL import Image
+
+try:
+    import imagehash
+    from PIL import Image
+except ImportError:
+    imagehash = None
+    Image = None
 
 from app.db import (
     create_image_cluster,
@@ -46,6 +51,22 @@ def get_image_file_id(message: Message) -> str | None:
 async def process_message_image(bot: Bot, message: Message, settings: object | None = None) -> None:
     file_id = get_image_file_id(message)
     if file_id is None:
+        return
+
+    if not image_dependencies_available():
+        event_id = create_image_event(
+            message_id=message.message_id,
+            chat_id=message.chat.id,
+            file_id=file_id,
+            created_at=message.date,
+            local_path=None,
+        )
+        update_image_event_failed(
+            event_id=event_id,
+            processed_at=datetime.utcnow(),
+            file_deleted=True,
+        )
+        logger.warning("Image processing skipped: Pillow/imagehash dependencies are not installed")
         return
 
     temp_dir = Path(tempfile.mkdtemp(prefix="telegram-stats-image-"))
@@ -97,12 +118,19 @@ async def process_message_image(bot: Bot, message: Message, settings: object | N
 
 
 def calculate_phash(path: Path) -> str:
+    if not image_dependencies_available():
+        raise RuntimeError("Image dependencies are not installed: Pillow and imagehash are required")
+
     with Image.open(path) as image:
         return str(imagehash.phash(image))
 
 
+def image_dependencies_available() -> bool:
+    return imagehash is not None and Image is not None
+
+
 def extract_ocr_text(path: Path) -> str | None:
-    if pytesseract is None:
+    if pytesseract is None or Image is None:
         return None
     try:
         with Image.open(path) as image:

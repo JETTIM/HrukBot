@@ -20,6 +20,7 @@ class Settings:
     bot_parse_mode: str = "HTML"
     db_path: Path = BASE_DIR / "data" / "bot.sqlite3"
     log_level: str = "INFO"
+    enable_image_processing: bool = True
     use_llm_topics: bool = False
     llm_backend: str = "llama_cpp"
     llm_model: str = ""
@@ -42,6 +43,7 @@ def get_settings() -> Settings:
         bot_parse_mode=os.getenv("BOT_PARSE_MODE", "HTML"),
         db_path=Path(os.getenv("DB_PATH", str(BASE_DIR / "data" / "bot.sqlite3"))),
         log_level=os.getenv("LOG_LEVEL", "INFO"),
+        enable_image_processing=_as_bool(os.getenv("ENABLE_IMAGE_PROCESSING", "true")),
         use_llm_topics=_as_bool(os.getenv("USE_LLM_TOPICS", "false")),
         llm_backend=os.getenv("LLM_BACKEND", "llama_cpp"),
         llm_model=os.getenv("LLM_MODEL", ""),
