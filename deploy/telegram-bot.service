@@ -1,0 +1,16 @@
+[Unit]
+Description=Telegram Statistics Bot
+After=network.target
+
+[Service]
+Type=simple
+User=YOUR_USER
+Group=YOUR_USER
+WorkingDirectory=/opt/telegram-stats-bot
+Environment="PYTHONUNBUFFERED=1"
+ExecStart=/opt/telegram-stats-bot/.venv/bin/python /opt/telegram-stats-bot/bot.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
