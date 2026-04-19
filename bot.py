@@ -38,6 +38,7 @@ _messages_since_svin_reply = 10
 _image_processing_semaphore: asyncio.Semaphore | None = None
 PENDING_TEXT = "⏳ ща напишу..."
 PENDING_MIN_SECONDS = 1.0
+SHORT_MEMORY_MESSAGES = 4
 
 
 def _detect_message_type(message: Message) -> str:
@@ -245,18 +246,48 @@ def _build_reply_text_context(message: Message, bot_username: str | None, bot_id
     return text[:1200]
 
 
+def _build_short_chat_memory(chat_id: int, current_message_id: int, limit: int = SHORT_MEMORY_MESSAGES) -> str | None:
+    rows = _get_chat_messages_by_day(date.today(), chat_id)
+    memory_rows: list[dict] = []
+    for row in reversed(rows):
+        if int(row.get("message_id") or 0) == current_message_id:
+            continue
+        text = str(row.get("text") or "").strip()
+        if not text:
+            continue
+        memory_rows.append(row)
+        if len(memory_rows) >= limit:
+            break
+
+    if not memory_rows:
+        return None
+
+    lines: list[str] = []
+    for row in reversed(memory_rows):
+        name = str(row.get("full_name") or row.get("username") or "user").strip()
+        text = " ".join(str(row.get("text") or "").split())
+        lines.append(f"{name}: {text[:300]}")
+    return "\n".join(lines)
+
+
 def _build_question_with_context(
     question: str,
     visual_context: str | None,
     reply_text_context: str | None = None,
+    short_memory: str | None = None,
 ) -> str:
-    if not visual_context and not reply_text_context:
+    if not visual_context and not reply_text_context and not short_memory:
         return question
     parts = [
         "Пользователь спрашивает в Telegram-чате.",
         "Ответь на русском, коротко и по делу.",
         f"Вопрос пользователя: {question}",
     ]
+    if short_memory:
+        parts.append(
+            "Короткий контекст последних сообщений. Используй его только если он помогает понять вопрос:\n"
+            f"{short_memory}"
+        )
     if reply_text_context:
         parts.append(f"Сообщение бота, на которое ответил пользователь:\n{reply_text_context}")
     if visual_context:
@@ -477,8 +508,9 @@ async def main() -> None:
             return
 
         pending_message, pending_started = await _send_pending(message)
+        short_memory = _build_short_chat_memory(message.chat.id, message.message_id)
         answer = try_answer_question(
-            _build_question_with_context(question, visual_context),
+            _build_question_with_context(question, visual_context, short_memory=short_memory),
             backend=settings.llm_backend,
             model=settings.llm_model,
             endpoint=settings.llm_endpoint,
@@ -582,13 +614,14 @@ async def main() -> None:
             if question:
                 visual_context = _build_reply_visual_context(message)
                 reply_text_context = _build_reply_text_context(message, bot_info.username, bot_info.id)
+                short_memory = _build_short_chat_memory(message.chat.id, message.message_id)
                 if _reply_has_visual_file(message) and visual_context is None:
                     await message.reply("Визуальный контекст этой картинки ещё не готов.")
                     return
 
                 pending_message, pending_started = await _send_pending(message, reply=True)
                 answer = try_answer_question(
-                    _build_question_with_context(question, visual_context, reply_text_context),
+                    _build_question_with_context(question, visual_context, reply_text_context, short_memory),
                     backend=settings.llm_backend,
                     model=settings.llm_model,
                     endpoint=settings.llm_endpoint,
