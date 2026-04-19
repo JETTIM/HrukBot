@@ -10,7 +10,7 @@ from urllib.request import Request, urlopen
 logger = logging.getLogger(__name__)
 
 MAX_MESSAGES = 500
-MAX_INPUT_CHARS = 6000
+MAX_INPUT_CHARS = 3500
 
 SYSTEM_PROMPT = (
     "Ты анализируешь переписку Telegram-чата.\n"
@@ -63,7 +63,7 @@ def try_extract_topics_and_summary(
             },
         ],
         "temperature": 0.3,
-        "max_tokens": 5000,
+        "max_tokens": 700,
     }
 
     try:
@@ -74,12 +74,18 @@ def try_extract_topics_and_summary(
         )
     except HTTPError as exc:
         if exc.code not in {400, 422}:
-            logger.exception("LLM topics request failed")
+            logger.exception("LLM topics request failed: %s", _read_http_error(exc))
             return None
-        logger.warning("LLM endpoint rejected response_format, retrying without it")
+        logger.warning(
+            "LLM endpoint rejected response_format, retrying without it: %s",
+            _read_http_error(exc),
+        )
         try:
             raw_content = _call_llama_cpp(endpoint=endpoint, payload=payload, timeout=timeout)
-        except (HTTPError, URLError, TimeoutError, OSError, ValueError, json.JSONDecodeError):
+        except HTTPError as retry_exc:
+            logger.exception("LLM topics retry failed: %s", _read_http_error(retry_exc))
+            return None
+        except (URLError, TimeoutError, OSError, ValueError, json.JSONDecodeError):
             logger.exception("LLM topics retry failed")
             return None
 
@@ -96,6 +102,13 @@ def try_extract_topics_and_summary(
     except (ValueError, json.JSONDecodeError):
         logger.exception("LLM topics request failed")
         return None
+
+
+def _read_http_error(exc: HTTPError) -> str:
+    try:
+        return exc.read().decode("utf-8", errors="replace")
+    except OSError:
+        return f"HTTP {exc.code}"
 
 
 def _call_llama_cpp(*, endpoint: str, payload: dict[str, Any], timeout: float) -> str:
