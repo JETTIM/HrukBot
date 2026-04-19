@@ -253,6 +253,40 @@ def try_answer_question(
     )
 
 
+def try_generate_image_cluster_summary(
+    context_lines: Sequence[str],
+    *,
+    backend: str,
+    model: str,
+    endpoint: str,
+    timeout: float,
+) -> str | None:
+    context = "\n".join(line.strip() for line in context_lines if line.strip())
+    if not context:
+        return None
+
+    return _try_generate_plain_text(
+        backend=backend,
+        model=model,
+        endpoint=endpoint,
+        timeout=timeout,
+        system_prompt=(
+            "Ты даешь короткие человекопонятные ярлыки визуальным шаблонам в Telegram-чате. "
+            "Используй только предоставленный контекст: подписи, OCR и соседний текст. "
+            "Не выдумывай детали картинки. Ответь одной короткой фразой на русском."
+        ),
+        user_prompt=(
+            "Нужно дать короткий label для повторяющегося визуального кластера.\n"
+            "Контекст последних появлений:\n"
+            f"{context[:2500]}\n\n"
+            "Ответь 3-8 словами. Без markdown."
+        ),
+        temperature=0.35,
+        max_tokens=80,
+        max_chars=160,
+    )
+
+
 def _try_generate_plain_text(
     *,
     backend: str,

@@ -13,7 +13,7 @@ from aiogram.filters import Command
 from aiogram.types import Message
 
 from app.config import get_settings
-from app.db import close_db, delete_messages_older_than, get_messages_by_day, init_db, save_message
+from app.db import close_db, delete_messages_older_than, get_messages_by_day, get_top_image_clusters, init_db, save_message
 from app.images import get_image_file_id, process_message_image
 from app.llm_topics import (
     try_answer_question,
@@ -89,6 +89,21 @@ def _extract_command_args(message: Message) -> str:
         return ""
     parts = message.text.split(maxsplit=1)
     return parts[1].strip() if len(parts) > 1 else ""
+
+
+def _format_visual_memory(limit: int = 8) -> str:
+    clusters = get_top_image_clusters(limit=limit)
+    if not clusters:
+        return "Визуальная память пока пустая."
+
+    lines = ["Визуальная память:"]
+    for cluster in clusters:
+        cluster_id = int(cluster["cluster_id"])
+        usage_count = int(cluster["usage_count"])
+        summary = str(cluster.get("cluster_summary") or "").strip()
+        label = summary if summary else "пока без описания"
+        lines.append(f"— #{cluster_id}: {label} ({usage_count} раз)")
+    return "\n".join(lines)
 
 
 async def main() -> None:
@@ -249,6 +264,13 @@ async def main() -> None:
             return
         await message.answer(escape(answer))
 
+    @router.message(Command("visual"))
+    async def on_visual(message: Message) -> None:
+        if message.chat.id != settings.allowed_chat_id:
+            return
+
+        await message.answer(escape(_format_visual_memory()))
+
     @router.message()
     async def on_message(message: Message) -> None:
         if message.chat.id != settings.allowed_chat_id:
@@ -261,6 +283,7 @@ async def main() -> None:
             "/when",
             "/mood",
             "/ask",
+            "/visual",
         )):
             return
         if message.from_user and message.from_user.id == bot_info.id:
@@ -294,7 +317,7 @@ async def main() -> None:
         )
 
         if get_image_file_id(message) is not None:
-            asyncio.create_task(process_message_image(bot, message))
+            asyncio.create_task(process_message_image(bot, message, settings=settings))
 
         global _last_cleanup_ts, _messages_since_svin_reply
         _messages_since_svin_reply += 1

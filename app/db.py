@@ -232,6 +232,37 @@ def get_image_clusters() -> list[dict[str, Any]]:
     return [dict(row) for row in rows]
 
 
+def get_top_image_clusters(limit: int = 10) -> list[dict[str, Any]]:
+    conn = _require_connection()
+    rows = conn.execute(
+        """
+        SELECT
+            cluster_id, canonical_hash, cluster_summary, usage_count,
+            first_seen_at, last_seen_at
+        FROM image_clusters
+        ORDER BY usage_count DESC, last_seen_at DESC
+        LIMIT ?
+        """,
+        (limit,),
+    ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def get_image_cluster(cluster_id: int) -> dict[str, Any] | None:
+    conn = _require_connection()
+    row = conn.execute(
+        """
+        SELECT
+            cluster_id, canonical_hash, cluster_summary, usage_count,
+            first_seen_at, last_seen_at
+        FROM image_clusters
+        WHERE cluster_id = ?
+        """,
+        (cluster_id,),
+    ).fetchone()
+    return dict(row) if row else None
+
+
 def create_image_cluster(
     *,
     canonical_hash: str,
@@ -264,6 +295,19 @@ def update_image_cluster_usage(*, cluster_id: int, seen_at: datetime) -> None:
         WHERE cluster_id = ?
         """,
         (timestamp, cluster_id),
+    )
+    conn.commit()
+
+
+def update_image_cluster_summary(*, cluster_id: int, cluster_summary: str) -> None:
+    conn = _require_connection()
+    conn.execute(
+        """
+        UPDATE image_clusters
+        SET cluster_summary = ?
+        WHERE cluster_id = ?
+        """,
+        (cluster_summary, cluster_id),
     )
     conn.commit()
 
@@ -361,6 +405,30 @@ def get_top_image_clusters_by_day(
         LIMIT ?
         """,
         (day, limit),
+    ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def get_image_cluster_context(cluster_id: int, limit: int = 12) -> list[dict[str, Any]]:
+    conn = _require_connection()
+    rows = conn.execute(
+        """
+        SELECT
+            e.created_at,
+            e.ocr_text,
+            e.summary_text,
+            m.text AS message_text,
+            m.full_name
+        FROM image_events e
+        LEFT JOIN messages m
+            ON m.chat_id = e.chat_id
+           AND m.message_id = e.message_id
+        WHERE e.cluster_id = ?
+          AND e.processing_status = 'processed'
+        ORDER BY e.created_at DESC
+        LIMIT ?
+        """,
+        (cluster_id, limit),
     ).fetchall()
     return [dict(row) for row in rows]
 

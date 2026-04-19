@@ -14,11 +14,15 @@ from PIL import Image
 from app.db import (
     create_image_cluster,
     create_image_event,
+    get_image_cluster,
+    get_image_cluster_context,
     get_image_clusters,
     update_image_cluster_usage,
+    update_image_cluster_summary,
     update_image_event_failed,
     update_image_event_processed,
 )
+from app.llm_topics import try_generate_image_cluster_summary
 
 logger = logging.getLogger(__name__)
 
@@ -39,7 +43,7 @@ def get_image_file_id(message: Message) -> str | None:
     return None
 
 
-async def process_message_image(bot: Bot, message: Message) -> None:
+async def process_message_image(bot: Bot, message: Message, settings: object | None = None) -> None:
     file_id = get_image_file_id(message)
     if file_id is None:
         return
@@ -80,6 +84,7 @@ async def process_message_image(bot: Bot, message: Message) -> None:
             processed_at=datetime.utcnow(),
             file_deleted=file_deleted,
         )
+        maybe_update_cluster_summary(cluster_id=cluster_id, settings=settings)
     except Exception:
         logger.exception("Image processing failed")
         file_deleted = delete_temp_path(temp_dir)
@@ -135,6 +140,48 @@ def find_or_create_cluster(*, phash: str, summary_text: str | None, seen_at: dat
         cluster_summary=summary_text,
         seen_at=seen_at,
     )
+
+
+def maybe_update_cluster_summary(*, cluster_id: int, settings: object | None) -> None:
+    if settings is None or not getattr(settings, "use_llm_topics", False):
+        return
+
+    cluster = get_image_cluster(cluster_id)
+    if not cluster:
+        return
+
+    usage_count = int(cluster.get("usage_count") or 0)
+    current_summary = str(cluster.get("cluster_summary") or "").strip()
+    if usage_count < 2:
+        return
+    if current_summary and usage_count not in {3, 5, 10, 20, 50}:
+        return
+
+    context_lines = build_cluster_context_lines(get_image_cluster_context(cluster_id))
+    summary = try_generate_image_cluster_summary(
+        context_lines,
+        backend=getattr(settings, "llm_backend", "llama_cpp"),
+        model=getattr(settings, "llm_model", ""),
+        endpoint=getattr(settings, "llm_endpoint", ""),
+        timeout=getattr(settings, "llm_timeout", 10),
+    )
+    if summary:
+        update_image_cluster_summary(cluster_id=cluster_id, cluster_summary=summary)
+
+
+def build_cluster_context_lines(rows: list[dict]) -> list[str]:
+    lines: list[str] = []
+    for row in rows:
+        parts: list[str] = []
+        message_text = str(row.get("message_text") or "").strip()
+        ocr_text = str(row.get("ocr_text") or "").strip()
+        if message_text:
+            parts.append(f"caption/context: {message_text[:220]}")
+        if ocr_text:
+            parts.append(f"ocr: {' '.join(ocr_text.split())[:220]}")
+        if parts:
+            lines.append("; ".join(parts))
+    return lines
 
 
 def hash_distance(left_hash: str, right_hash: str) -> int:
