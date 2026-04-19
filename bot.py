@@ -271,7 +271,10 @@ async def main() -> None:
                 timeout=settings.llm_timeout,
             )
             if comment is not None:
-                await message.answer(escape(comment))
+                await message.answer(
+                    escape(comment),
+                    reply_to_message_id=message.message_id,
+                )
                 _messages_since_svin_reply = 0
 
     dp.include_router(router)
