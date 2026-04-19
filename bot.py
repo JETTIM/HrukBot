@@ -14,7 +14,13 @@ from aiogram.types import Message
 
 from app.config import get_settings
 from app.db import close_db, delete_messages_older_than, get_messages_by_day, init_db, save_message
-from app.llm_topics import try_generate_mood_summary, try_generate_svin_comment, try_generate_svin_joke
+from app.images import get_image_file_id, process_message_image
+from app.llm_topics import (
+    try_answer_question,
+    try_generate_mood_summary,
+    try_generate_svin_comment,
+    try_generate_svin_joke,
+)
 from app.report import activity_by_hour, calculate_daily_stats, format_daily_report
 from daily_report import build_topics_and_summary_lines, build_user_names
 
@@ -76,6 +82,13 @@ def _build_topics_source(messages: list[dict]) -> list[str]:
 
 def _should_try_svin_reply(today_messages_count: int) -> bool:
     return today_messages_count >= 10 and _messages_since_svin_reply >= 10 and random.random() < 0.03
+
+
+def _extract_command_args(message: Message) -> str:
+    if not message.text:
+        return ""
+    parts = message.text.split(maxsplit=1)
+    return parts[1].strip() if len(parts) > 1 else ""
 
 
 async def main() -> None:
@@ -211,6 +224,31 @@ async def main() -> None:
         if joke is not None:
             await message.answer(escape(joke))
 
+    @router.message(Command("ask"))
+    async def on_ask(message: Message) -> None:
+        if message.chat.id != settings.allowed_chat_id:
+            return
+
+        question = _extract_command_args(message)
+        if not question:
+            await message.answer("Напиши вопрос после команды: /ask что спросить")
+            return
+        if not settings.use_llm_topics:
+            await message.answer("LLM сейчас выключена.")
+            return
+
+        answer = try_answer_question(
+            question,
+            backend=settings.llm_backend,
+            model=settings.llm_model,
+            endpoint=settings.llm_endpoint,
+            timeout=settings.llm_timeout,
+        )
+        if answer is None:
+            await message.answer("Не смогла получить ответ от LLM.")
+            return
+        await message.answer(escape(answer))
+
     @router.message()
     async def on_message(message: Message) -> None:
         if message.chat.id != settings.allowed_chat_id:
@@ -222,6 +260,7 @@ async def main() -> None:
             "/time",
             "/when",
             "/mood",
+            "/ask",
         )):
             return
         if message.from_user and message.from_user.id == bot_info.id:
@@ -253,6 +292,9 @@ async def main() -> None:
             message.message_id,
             message_type,
         )
+
+        if get_image_file_id(message) is not None:
+            asyncio.create_task(process_message_image(bot, message))
 
         global _last_cleanup_ts, _messages_since_svin_reply
         _messages_since_svin_reply += 1

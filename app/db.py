@@ -25,6 +25,41 @@ CREATE INDEX IF NOT EXISTS idx_messages_created_at
 
 CREATE INDEX IF NOT EXISTS idx_messages_chat_created_at
     ON messages(chat_id, created_at);
+
+CREATE TABLE IF NOT EXISTS image_clusters (
+    cluster_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    canonical_hash TEXT NOT NULL,
+    cluster_summary TEXT,
+    usage_count INTEGER NOT NULL DEFAULT 1,
+    first_seen_at TEXT NOT NULL,
+    last_seen_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_image_clusters_canonical_hash
+    ON image_clusters(canonical_hash);
+
+CREATE TABLE IF NOT EXISTS image_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    message_id INTEGER NOT NULL,
+    chat_id INTEGER NOT NULL,
+    file_id TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    local_path TEXT,
+    phash TEXT,
+    cluster_id INTEGER,
+    ocr_text TEXT,
+    summary_text TEXT,
+    processing_status TEXT NOT NULL DEFAULT 'pending',
+    processed_at TEXT,
+    file_deleted INTEGER NOT NULL DEFAULT 0,
+    FOREIGN KEY(cluster_id) REFERENCES image_clusters(cluster_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_image_events_created_at
+    ON image_events(created_at);
+
+CREATE INDEX IF NOT EXISTS idx_image_events_cluster_id
+    ON image_events(cluster_id);
 """
 
 _connection: sqlite3.Connection | None = None
@@ -158,6 +193,176 @@ def delete_messages_older_than(days: int) -> int:
     )
     conn.commit()
     return int(cursor.rowcount)
+
+
+def create_image_event(
+    *,
+    message_id: int,
+    chat_id: int,
+    file_id: str,
+    created_at: datetime,
+    local_path: str,
+) -> int:
+    conn = _require_connection()
+    timestamp = created_at.replace(microsecond=0).isoformat(sep=" ")
+    cursor = conn.execute(
+        """
+        INSERT INTO image_events (
+            message_id, chat_id, file_id, created_at, local_path, processing_status
+        )
+        VALUES (?, ?, ?, ?, ?, 'pending')
+        """,
+        (message_id, chat_id, file_id, timestamp, local_path),
+    )
+    conn.commit()
+    return int(cursor.lastrowid)
+
+
+def get_image_clusters() -> list[dict[str, Any]]:
+    conn = _require_connection()
+    rows = conn.execute(
+        """
+        SELECT
+            cluster_id, canonical_hash, cluster_summary, usage_count,
+            first_seen_at, last_seen_at
+        FROM image_clusters
+        ORDER BY usage_count DESC
+        """
+    ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def create_image_cluster(
+    *,
+    canonical_hash: str,
+    cluster_summary: str | None,
+    seen_at: datetime,
+) -> int:
+    conn = _require_connection()
+    timestamp = seen_at.replace(microsecond=0).isoformat(sep=" ")
+    cursor = conn.execute(
+        """
+        INSERT INTO image_clusters (
+            canonical_hash, cluster_summary, usage_count, first_seen_at, last_seen_at
+        )
+        VALUES (?, ?, 1, ?, ?)
+        """,
+        (canonical_hash, cluster_summary, timestamp, timestamp),
+    )
+    conn.commit()
+    return int(cursor.lastrowid)
+
+
+def update_image_cluster_usage(*, cluster_id: int, seen_at: datetime) -> None:
+    conn = _require_connection()
+    timestamp = seen_at.replace(microsecond=0).isoformat(sep=" ")
+    conn.execute(
+        """
+        UPDATE image_clusters
+        SET usage_count = usage_count + 1,
+            last_seen_at = ?
+        WHERE cluster_id = ?
+        """,
+        (timestamp, cluster_id),
+    )
+    conn.commit()
+
+
+def update_image_event_processed(
+    *,
+    event_id: int,
+    phash: str,
+    cluster_id: int,
+    ocr_text: str | None,
+    summary_text: str | None,
+    processed_at: datetime,
+    file_deleted: bool,
+) -> None:
+    conn = _require_connection()
+    timestamp = processed_at.replace(microsecond=0).isoformat(sep=" ")
+    conn.execute(
+        """
+        UPDATE image_events
+        SET phash = ?,
+            cluster_id = ?,
+            ocr_text = ?,
+            summary_text = ?,
+            processing_status = 'processed',
+            processed_at = ?,
+            file_deleted = ?,
+            local_path = NULL
+        WHERE id = ?
+        """,
+        (phash, cluster_id, ocr_text, summary_text, timestamp, int(file_deleted), event_id),
+    )
+    conn.commit()
+
+
+def update_image_event_failed(
+    *,
+    event_id: int,
+    processed_at: datetime,
+    file_deleted: bool,
+) -> None:
+    conn = _require_connection()
+    timestamp = processed_at.replace(microsecond=0).isoformat(sep=" ")
+    conn.execute(
+        """
+        UPDATE image_events
+        SET processing_status = 'failed',
+            processed_at = ?,
+            file_deleted = ?,
+            local_path = NULL
+        WHERE id = ?
+        """,
+        (timestamp, int(file_deleted), event_id),
+    )
+    conn.commit()
+
+
+def get_image_events_by_day(day_value: date | datetime | str) -> list[dict[str, Any]]:
+    conn = _require_connection()
+    day = _as_iso_date(day_value)
+    rows = conn.execute(
+        """
+        SELECT
+            id, message_id, chat_id, file_id, created_at, phash, cluster_id,
+            ocr_text, summary_text, processing_status, processed_at, file_deleted
+        FROM image_events
+        WHERE DATE(created_at) = DATE(?)
+        ORDER BY created_at ASC
+        """,
+        (day,),
+    ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def get_top_image_clusters_by_day(
+    day_value: date | datetime | str,
+    limit: int = 5,
+) -> list[dict[str, Any]]:
+    conn = _require_connection()
+    day = _as_iso_date(day_value)
+    rows = conn.execute(
+        """
+        SELECT
+            c.cluster_id,
+            c.canonical_hash,
+            c.cluster_summary,
+            c.usage_count,
+            COUNT(e.id) AS day_count,
+            MAX(e.created_at) AS last_event_at
+        FROM image_events e
+        JOIN image_clusters c ON c.cluster_id = e.cluster_id
+        WHERE DATE(e.created_at) = DATE(?)
+          AND e.processing_status = 'processed'
+        GROUP BY c.cluster_id
+        ORDER BY day_count DESC, c.usage_count DESC
+        LIMIT ?
+        """,
+        (day, limit),
+    ).fetchall()
+    return [dict(row) for row in rows]
 
 
 def _require_connection() -> sqlite3.Connection:

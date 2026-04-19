@@ -164,7 +164,7 @@ def try_generate_mood_summary(
     if not prompt_input:
         return None
 
-    comment = _try_generate_plain_text(
+    return _try_generate_plain_text(
         backend=backend,
         model=model,
         endpoint=endpoint,
@@ -198,7 +198,7 @@ def try_generate_svin_comment(
     if not message_text.strip():
         return None
 
-    return _try_generate_plain_text(
+    comment = _try_generate_plain_text(
         backend=backend,
         model=model,
         endpoint=endpoint,
@@ -223,6 +223,34 @@ def try_generate_svin_comment(
     if comment is None:
         return None
     return " ".join(comment.split()[:8])
+
+
+def try_answer_question(
+    question: str,
+    *,
+    backend: str,
+    model: str,
+    endpoint: str,
+    timeout: float,
+) -> str | None:
+    question = question.strip()
+    if not question:
+        return None
+
+    return _try_generate_plain_text(
+        backend=backend,
+        model=model,
+        endpoint=endpoint,
+        timeout=timeout,
+        system_prompt=(
+            "Ты отвечаешь на вопросы в маленьком Telegram-чате. "
+            "Пиши на русском, кратко, понятно и без markdown."
+        ),
+        user_prompt=question[:1500],
+        temperature=0.5,
+        max_tokens=500,
+        max_chars=1800,
+    )
 
 
 def _try_generate_plain_text(
