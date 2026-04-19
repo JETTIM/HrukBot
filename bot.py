@@ -4,7 +4,8 @@ import asyncio
 import logging
 import random
 import time
-from datetime import date
+from datetime import date, timedelta
+from html import escape
 
 from aiogram import Bot, Dispatcher, Router
 from aiogram.client.default import DefaultBotProperties
@@ -13,20 +14,13 @@ from aiogram.types import Message
 
 from app.config import get_settings
 from app.db import close_db, delete_messages_older_than, get_messages_by_day, init_db, save_message
-from app.llm_topics import try_generate_svin_joke
-from app.report import calculate_daily_stats, format_daily_report
+from app.llm_topics import try_generate_mood_summary, try_generate_svin_comment, try_generate_svin_joke
+from app.report import activity_by_hour, calculate_daily_stats, format_daily_report
 from daily_report import build_topics_and_summary_lines, build_user_names
 
 logger = logging.getLogger(__name__)
 _last_cleanup_ts: float = 0.0
-
-BOT_ROASTS = (
-    "Я тут. А ты, я вижу, опять решил проверить, выдержит ли чат ещё одну мысль.",
-    "Слушаю. Только давай без героизма, мы оба знаем твой стиль.",
-    "Звал? Надеюсь, это не очередная попытка победить здравый смысл.",
-    "На месте. Формулируй аккуратно, не пугай идею раньше времени.",
-    "Я готов. Вопрос только в том, готов ли к этому твой план.",
-)
+_messages_since_svin_reply = 10
 
 
 def _detect_message_type(message: Message) -> str:
@@ -53,28 +47,35 @@ def _word_count(text: str) -> int:
     return len(text.split()) if text else 0
 
 
-def _is_addressed_to_bot(
-    message: Message,
-    *,
-    bot_id: int,
-    bot_username: str | None,
-    bot_name: str | None,
-) -> bool:
-    text = _extract_text(message).lower()
-    if not text:
-        return False
-    if message.reply_to_message and message.reply_to_message.from_user:
-        if message.reply_to_message.from_user.id == bot_id:
-            return True
-    if bot_username and f"@{bot_username.lower()}" in text:
-        return True
-    if bot_name and bot_name.lower() in text:
-        return True
-    return text.startswith(("бот ", "бот,", "бот!", "бот."))
+def _get_chat_messages_by_day(day_value: date, chat_id: int) -> list[dict]:
+    rows = get_messages_by_day(day_value)
+    return [row for row in rows if int(row.get("chat_id", 0)) == chat_id]
 
 
-def _build_roast() -> str:
-    return random.choice(BOT_ROASTS)
+def _format_hour_window(hour: int) -> str:
+    next_hour = (hour + 1) % 24
+    return f"{hour:02d}:00–{next_hour:02d}:00"
+
+
+def _estimate_minutes(messages_count: int) -> int:
+    seconds = messages_count * 7
+    return (seconds + 59) // 60 if seconds else 0
+
+
+def _fallback_mood(messages_count: int) -> str:
+    if messages_count >= 40:
+        return "чат активный"
+    if messages_count >= 10:
+        return "чат умеренный"
+    return "чат тихий"
+
+
+def _build_topics_source(messages: list[dict]) -> list[str]:
+    return [str(row.get("text") or "") for row in messages]
+
+
+def _should_try_svin_reply(today_messages_count: int) -> bool:
+    return today_messages_count >= 10 and _messages_since_svin_reply >= 10 and random.random() < 0.03
 
 
 async def main() -> None:
@@ -101,8 +102,7 @@ async def main() -> None:
             return
 
         today = date.today()
-        day_messages = get_messages_by_day(today)
-        messages = [row for row in day_messages if int(row.get("chat_id", 0)) == settings.allowed_chat_id]
+        messages = _get_chat_messages_by_day(today, settings.allowed_chat_id)
         user_names = build_user_names(messages)
 
         stats = calculate_daily_stats(messages)
@@ -123,6 +123,78 @@ async def main() -> None:
         )
         await message.answer(report_text)
 
+    @router.message(Command("dead"))
+    async def on_dead(message: Message) -> None:
+        if message.chat.id != settings.allowed_chat_id:
+            return
+
+        today = date.today()
+        today_count = len(_get_chat_messages_by_day(today, settings.allowed_chat_id))
+        yesterday_count = len(_get_chat_messages_by_day(today - timedelta(days=1), settings.allowed_chat_id))
+
+        if yesterday_count == 0:
+            text = (
+                "☠️ Активность чата\n\n"
+                f"— сегодня: {today_count} сообщений\n"
+                f"— вчера: {yesterday_count} сообщений"
+            )
+        else:
+            death_percent = 100 - (today_count / yesterday_count * 100)
+            text = (
+                f"☠️ Чат мёртв на {death_percent:.0f}%\n\n"
+                f"— сегодня: {today_count} сообщений\n"
+                f"— вчера: {yesterday_count} сообщений"
+            )
+        await message.answer(text)
+
+    @router.message(Command("time"))
+    async def on_time(message: Message) -> None:
+        if message.chat.id != settings.allowed_chat_id:
+            return
+
+        messages_count = len(_get_chat_messages_by_day(date.today(), settings.allowed_chat_id))
+        await message.answer(
+            "⏳ Сегодня:\n\n"
+            f"— сообщений: {messages_count}\n"
+            f"— примерное время: ~{_estimate_minutes(messages_count)} минут"
+        )
+
+    @router.message(Command("when"))
+    async def on_when(message: Message) -> None:
+        if message.chat.id != settings.allowed_chat_id:
+            return
+
+        messages = _get_chat_messages_by_day(date.today(), settings.allowed_chat_id)
+        hourly = activity_by_hour(messages)
+        peak_hour, peak_count = max(hourly.items(), key=lambda item: item[1])
+        quiet_hour, _ = min(hourly.items(), key=lambda item: item[1])
+
+        await message.answer(
+            "⏰ Пик активности:\n\n"
+            f"— {_format_hour_window(peak_hour)} ({peak_count} сообщений)\n\n"
+            "📉 Самое тихое время:\n"
+            f"— {_format_hour_window(quiet_hour)}"
+        )
+
+    @router.message(Command("mood"))
+    async def on_mood(message: Message) -> None:
+        if message.chat.id != settings.allowed_chat_id:
+            return
+
+        messages = _get_chat_messages_by_day(date.today(), settings.allowed_chat_id)
+        mood = None
+        if settings.use_llm_topics:
+            mood = try_generate_mood_summary(
+                _build_topics_source(messages),
+                backend=settings.llm_backend,
+                model=settings.llm_model,
+                endpoint=settings.llm_endpoint,
+                timeout=settings.llm_timeout,
+            )
+        if mood is None:
+            mood = _fallback_mood(len(messages))
+        await message.answer(escape(mood))
+
     @router.message(Command("svin"))
     async def on_svin(message: Message) -> None:
         if message.chat.id != settings.allowed_chat_id:
@@ -136,15 +208,23 @@ async def main() -> None:
                 endpoint=settings.llm_endpoint,
                 timeout=settings.llm_timeout,
             )
-        if joke is None:
-            joke = "Свинья решила стать диетологом. Первый совет клиентам был короткий: не ешьте всё подряд, оставьте что-нибудь мне."
-        await message.answer(joke)
+        if joke is not None:
+            await message.answer(escape(joke))
 
     @router.message()
     async def on_message(message: Message) -> None:
         if message.chat.id != settings.allowed_chat_id:
             return
-        if message.text and message.text.strip().lower().startswith(("/stats", "/svin")):
+        if message.text and message.text.strip().lower().startswith((
+            "/stats",
+            "/svin",
+            "/dead",
+            "/time",
+            "/when",
+            "/mood",
+        )):
+            return
+        if message.from_user and message.from_user.id == bot_info.id:
             return
 
         text_content = _extract_text(message)
@@ -174,19 +254,25 @@ async def main() -> None:
             message_type,
         )
 
-        global _last_cleanup_ts
+        global _last_cleanup_ts, _messages_since_svin_reply
+        _messages_since_svin_reply += 1
         now_ts = time.time()
         if now_ts - _last_cleanup_ts >= 3600:
             delete_messages_older_than(7)
             _last_cleanup_ts = now_ts
 
-        if _is_addressed_to_bot(
-            message,
-            bot_id=bot_info.id,
-            bot_username=bot_info.username,
-            bot_name=bot_info.first_name,
-        ):
-            await message.answer(_build_roast())
+        today_messages_count = len(_get_chat_messages_by_day(date.today(), settings.allowed_chat_id))
+        if settings.use_llm_topics and _should_try_svin_reply(today_messages_count):
+            comment = try_generate_svin_comment(
+                text_content,
+                backend=settings.llm_backend,
+                model=settings.llm_model,
+                endpoint=settings.llm_endpoint,
+                timeout=settings.llm_timeout,
+            )
+            if comment is not None:
+                await message.answer(escape(comment))
+                _messages_since_svin_reply = 0
 
     dp.include_router(router)
 

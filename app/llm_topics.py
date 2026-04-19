@@ -149,14 +149,125 @@ def try_generate_svin_joke(
         logger.exception("LLM svin joke request failed")
         return None
 
-    return _clean_plain_text(joke, max_chars=900)
+    return _clean_plain_text(joke, max_chars=900, check_joke=True)
 
 
-def _clean_plain_text(text: str, *, max_chars: int) -> str | None:
+def try_generate_mood_summary(
+    messages: Sequence[str],
+    *,
+    backend: str,
+    model: str,
+    endpoint: str,
+    timeout: float,
+) -> str | None:
+    prompt_input = _build_corpus(messages)
+    if not prompt_input:
+        return None
+
+    comment = _try_generate_plain_text(
+        backend=backend,
+        model=model,
+        endpoint=endpoint,
+        timeout=timeout,
+        system_prompt=(
+            "Ты коротко оцениваешь настроение и активность маленького Telegram-чата. "
+            "Пиши естественно, на русском, без списков и без markdown."
+        ),
+        user_prompt=(
+            "Проанализируй сообщения чата за день.\n"
+            "Коротко оцени:\n"
+            "- уровень активности\n"
+            "- характер общения (обсуждение, троллинг, болтовня и т.д.)\n"
+            "Ответ 2-3 строками на русском.\n\n"
+            f"Сообщения:\n{prompt_input}"
+        ),
+        temperature=0.45,
+        max_tokens=180,
+        max_chars=900,
+    )
+
+
+def try_generate_svin_comment(
+    message_text: str,
+    *,
+    backend: str,
+    model: str,
+    endpoint: str,
+    timeout: float,
+) -> str | None:
+    if not message_text.strip():
+        return None
+
+    return _try_generate_plain_text(
+        backend=backend,
+        model=model,
+        endpoint=endpoint,
+        timeout=timeout,
+        system_prompt=(
+            "Ты отвечаешь как ироничный Telegram-бот. "
+            "Пиши по-русски, одной короткой фразой, без злобы и без объяснений."
+        ),
+        user_prompt=(
+            "Это сообщение из Telegram-чата.\n\n"
+            f"{message_text.strip()[:500]}\n\n"
+            "Ответь ОДНОЙ короткой ироничной фразой.\n"
+            "Без пояснений.\n"
+            "Без цитирования.\n"
+            "На русском языке.\n"
+            "Максимум 8 слов."
+        ),
+        temperature=0.7,
+        max_tokens=50,
+        max_chars=120,
+    )
+    if comment is None:
+        return None
+    return " ".join(comment.split()[:8])
+
+
+def _try_generate_plain_text(
+    *,
+    backend: str,
+    model: str,
+    endpoint: str,
+    timeout: float,
+    system_prompt: str,
+    user_prompt: str,
+    temperature: float,
+    max_tokens: int,
+    max_chars: int,
+) -> str | None:
+    if backend.strip().lower() != "llama_cpp":
+        logger.warning("Unsupported LLM backend: %s", backend)
+        return None
+
+    payload = {
+        "model": model,
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ],
+        "temperature": temperature,
+        "max_tokens": max_tokens,
+    }
+
+    try:
+        text = _call_llama_cpp(endpoint=endpoint, payload=payload, timeout=timeout)
+    except HTTPError as exc:
+        logger.exception("LLM plain text request failed: %s", _read_http_error(exc))
+        return None
+    except (URLError, TimeoutError, OSError, ValueError, json.JSONDecodeError):
+        logger.exception("LLM plain text request failed")
+        return None
+
+    return _clean_plain_text(text, max_chars=max_chars)
+
+
+def _clean_plain_text(text: str, *, max_chars: int, check_joke: bool = False) -> str | None:
     cleaned = _strip_markdown_fence(text).strip().strip('"')
     if not cleaned:
         return None
-    if _looks_like_bad_joke(cleaned):
+    if check_joke and _looks_like_bad_joke(cleaned):
         logger.warning("LLM svin joke rejected by simple quality filter")
         return None
     return cleaned[:max_chars]
