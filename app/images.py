@@ -32,6 +32,7 @@ from app.llm_topics import try_generate_image_cluster_summary
 logger = logging.getLogger(__name__)
 
 HASH_DISTANCE_THRESHOLD = 8
+DEFAULT_MAX_IMAGE_FILE_SIZE_MB = 20.0
 
 try:
     import pytesseract
@@ -40,17 +41,52 @@ except ImportError:
 
 
 def get_image_file_id(message: Message) -> str | None:
+    info = get_visual_file_info(message)
+    return info[0] if info else None
+
+
+def get_visual_file_info(message: Message) -> tuple[str, int | None] | None:
     if message.photo:
-        return message.photo[-1].file_id
+        photo = message.photo[-1]
+        return photo.file_id, photo.file_size
+    if message.animation:
+        if message.animation.thumbnail:
+            return message.animation.thumbnail.file_id, message.animation.thumbnail.file_size
+        return message.animation.file_id, message.animation.file_size
     if message.document and message.document.mime_type:
         if message.document.mime_type.startswith("image/"):
-            return message.document.file_id
+            return message.document.file_id, message.document.file_size
     return None
 
 
 async def process_message_image(bot: Bot, message: Message, settings: object | None = None) -> None:
-    file_id = get_image_file_id(message)
-    if file_id is None:
+    file_info = get_visual_file_info(message)
+    if file_info is None:
+        return
+
+    file_id, file_size = file_info
+    context_text = extract_message_context(message)
+    max_size_mb = float(getattr(settings, "max_image_file_size_mb", DEFAULT_MAX_IMAGE_FILE_SIZE_MB))
+    if file_size is not None and file_size > int(max_size_mb * 1024 * 1024):
+        event_id = create_image_event(
+            message_id=message.message_id,
+            chat_id=message.chat.id,
+            file_id=file_id,
+            created_at=message.date,
+            local_path=None,
+            file_size=file_size,
+            context_text=context_text,
+        )
+        update_image_event_failed(
+            event_id=event_id,
+            processed_at=datetime.utcnow(),
+            file_deleted=True,
+        )
+        logger.warning(
+            "Image processing skipped: file is too large (%s bytes, limit %.1f MB)",
+            file_size,
+            max_size_mb,
+        )
         return
 
     if not image_dependencies_available():
@@ -60,6 +96,8 @@ async def process_message_image(bot: Bot, message: Message, settings: object | N
             file_id=file_id,
             created_at=message.date,
             local_path=None,
+            file_size=file_size,
+            context_text=context_text,
         )
         update_image_event_failed(
             event_id=event_id,
@@ -81,6 +119,8 @@ async def process_message_image(bot: Bot, message: Message, settings: object | N
             file_id=file_id,
             created_at=message.date,
             local_path=str(local_path),
+            file_size=file_size,
+            context_text=context_text,
         )
 
         telegram_file = await bot.get_file(file_id)
@@ -148,6 +188,13 @@ def build_image_summary(ocr_text: str | None) -> str | None:
     return compact[:160]
 
 
+def extract_message_context(message: Message) -> str | None:
+    text = (message.caption or message.text or "").strip()
+    if not text:
+        return None
+    return " ".join(text.split())[:500]
+
+
 def find_or_create_cluster(*, phash: str, summary_text: str | None, seen_at: datetime) -> int:
     best_cluster_id: int | None = None
     best_distance: int | None = None
@@ -185,7 +232,7 @@ def maybe_update_cluster_summary(*, cluster_id: int, settings: object | None) ->
     if current_summary and usage_count not in {3, 5, 10, 20, 50}:
         return
 
-    context_lines = build_cluster_context_lines(get_image_cluster_context(cluster_id))
+    context_lines = build_cluster_context_lines(get_image_cluster_context(cluster_id, days=62))
     summary = try_generate_image_cluster_summary(
         context_lines,
         backend=getattr(settings, "llm_backend", "llama_cpp"),
@@ -201,7 +248,7 @@ def build_cluster_context_lines(rows: list[dict]) -> list[str]:
     lines: list[str] = []
     for row in rows:
         parts: list[str] = []
-        message_text = str(row.get("message_text") or "").strip()
+        message_text = str(row.get("context_text") or row.get("message_text") or "").strip()
         ocr_text = str(row.get("ocr_text") or "").strip()
         if message_text:
             parts.append(f"caption/context: {message_text[:220]}")

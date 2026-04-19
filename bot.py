@@ -13,7 +13,15 @@ from aiogram.filters import Command
 from aiogram.types import Message
 
 from app.config import get_settings
-from app.db import close_db, delete_messages_older_than, get_messages_by_day, get_top_image_clusters, init_db, save_message
+from app.db import (
+    close_db,
+    delete_messages_older_than,
+    get_image_event_by_message,
+    get_messages_by_day,
+    get_top_image_clusters,
+    init_db,
+    save_message,
+)
 from app.images import get_image_file_id, process_message_image
 from app.llm_topics import (
     try_answer_question,
@@ -27,6 +35,7 @@ from daily_report import build_topics_and_summary_lines, build_user_names
 logger = logging.getLogger(__name__)
 _last_cleanup_ts: float = 0.0
 _messages_since_svin_reply = 10
+_image_processing_semaphore: asyncio.Semaphore | None = None
 
 
 def _detect_message_type(message: Message) -> str:
@@ -34,6 +43,8 @@ def _detect_message_type(message: Message) -> str:
         return "text"
     if message.photo:
         return "photo"
+    if message.animation:
+        return "animation"
     if message.video:
         return "video"
     if message.sticker:
@@ -91,6 +102,130 @@ def _extract_command_args(message: Message) -> str:
     return parts[1].strip() if len(parts) > 1 else ""
 
 
+def _is_addressed_to_bot(message: Message, bot_username: str | None, bot_id: int) -> bool:
+    text = (message.text or message.caption or "").lower()
+    username_hit = bool(bot_username and f"@{bot_username.lower()}" in text)
+    reply_hit = bool(
+        message.reply_to_message
+        and message.reply_to_message.from_user
+        and message.reply_to_message.from_user.id == bot_id
+    )
+    return username_hit or reply_hit
+
+
+def _strip_bot_mention(text: str, bot_username: str | None) -> str:
+    if not bot_username:
+        return text.strip()
+    return text.replace(f"@{bot_username}", "").replace(f"@{bot_username.lower()}", "").strip()
+
+
+def _build_reply_visual_context(message: Message) -> str | None:
+    reply = message.reply_to_message
+    if not reply:
+        return None
+
+    event = get_image_event_by_message(chat_id=reply.chat.id, message_id=reply.message_id)
+    if not event:
+        return None
+
+    status = str(event.get("processing_status") or "")
+    if status != "processed":
+        return "Визуальный контекст reply-сообщения пока не обработан."
+
+    parts: list[str] = []
+    cluster_id = event.get("cluster_id")
+    cluster_summary = str(event.get("cluster_summary") or "").strip()
+    summary_text = str(event.get("summary_text") or "").strip()
+    ocr_text = str(event.get("ocr_text") or "").strip()
+    context_text = str(event.get("context_text") or "").strip()
+    usage_count = event.get("usage_count")
+
+    if cluster_id:
+        parts.append(f"visual cluster #{cluster_id}")
+    if usage_count:
+        parts.append(f"повторов в памяти: {usage_count}")
+    if cluster_summary:
+        parts.append(f"описание кластера: {cluster_summary}")
+    if summary_text and summary_text != cluster_summary:
+        parts.append(f"OCR/label: {summary_text}")
+    if ocr_text:
+        parts.append(f"OCR текст: {' '.join(ocr_text.split())[:500]}")
+    if context_text:
+        parts.append(f"caption/context: {context_text[:500]}")
+
+    return "\n".join(parts) if parts else "Картинка знакома, но осмысленного описания пока нет."
+
+
+def _format_reply_visual_status(message: Message) -> str:
+    reply = message.reply_to_message
+    if not reply:
+        return "Ответь командой /seen на картинку, GIF или image-файл."
+
+    if get_image_file_id(reply) is None:
+        return "В reply-сообщении нет картинки/GIF/image-файла."
+
+    event = get_image_event_by_message(chat_id=reply.chat.id, message_id=reply.message_id)
+    if not event:
+        return (
+            "Этот файл ещё не изучался.\n"
+            "Возможные причины: бот получил его до включения визуальной памяти, обработка отключена или событие ещё не дошло до фоновой задачи."
+        )
+
+    status = str(event.get("processing_status") or "unknown")
+    file_size = event.get("file_size")
+    cluster_id = event.get("cluster_id")
+    usage_count = event.get("usage_count")
+    cluster_summary = str(event.get("cluster_summary") or "").strip()
+    summary_text = str(event.get("summary_text") or "").strip()
+    processed_at = str(event.get("processed_at") or "").strip()
+
+    lines = ["Проверка файла:"]
+    if status == "processed":
+        lines.append("— статус: изучен")
+    elif status == "failed":
+        lines.append("— статус: не изучен, обработка не удалась или файл был пропущен")
+    else:
+        lines.append(f"— статус: {status}")
+
+    if cluster_id:
+        lines.append(f"— cluster: #{cluster_id}")
+    if usage_count:
+        lines.append(f"— повторов в памяти: {usage_count}")
+    if file_size:
+        lines.append(f"— размер: ~{int(file_size) // 1024} KB")
+    if cluster_summary:
+        lines.append(f"— описание: {cluster_summary}")
+    elif summary_text:
+        lines.append(f"— OCR/label: {summary_text}")
+    else:
+        lines.append("— описание: пока нет")
+    if processed_at:
+        lines.append(f"— обработан: {processed_at}")
+
+    return "\n".join(lines)
+
+
+def _build_question_with_context(question: str, visual_context: str | None) -> str:
+    if not visual_context:
+        return question
+    return (
+        "Пользователь спрашивает в Telegram-чате.\n"
+        "Если вопрос относится к reply-картинке, используй только сохранённый визуальный контекст ниже. "
+        "Не утверждай, что видишь изображение напрямую.\n\n"
+        f"Вопрос: {question}\n\n"
+        f"Визуальный контекст reply-сообщения:\n{visual_context}"
+    )
+
+
+async def _process_message_image_limited(bot: Bot, message: Message, settings: object) -> None:
+    if _image_processing_semaphore is None:
+        await process_message_image(bot, message, settings=settings)
+        return
+
+    async with _image_processing_semaphore:
+        await process_message_image(bot, message, settings=settings)
+
+
 def _format_visual_memory(limit: int = 8) -> str:
     clusters = get_top_image_clusters(limit=limit)
     if not clusters:
@@ -107,6 +242,7 @@ def _format_visual_memory(limit: int = 8) -> str:
 
 
 async def main() -> None:
+    global _image_processing_semaphore
     settings = get_settings()
 
     logging.basicConfig(
@@ -115,6 +251,7 @@ async def main() -> None:
     )
 
     init_db(settings.db_path)
+    _image_processing_semaphore = asyncio.Semaphore(1)
 
     bot = Bot(
         token=settings.bot_token,
@@ -252,8 +389,13 @@ async def main() -> None:
             await message.answer("LLM сейчас выключена.")
             return
 
+        visual_context = _build_reply_visual_context(message)
+        if message.reply_to_message and get_image_file_id(message.reply_to_message) and visual_context is None:
+            await message.answer("Визуальный контекст этой картинки ещё не готов.")
+            return
+
         answer = try_answer_question(
-            question,
+            _build_question_with_context(question, visual_context),
             backend=settings.llm_backend,
             model=settings.llm_model,
             endpoint=settings.llm_endpoint,
@@ -271,6 +413,13 @@ async def main() -> None:
 
         await message.answer(escape(_format_visual_memory()))
 
+    @router.message(Command("seen"))
+    async def on_seen(message: Message) -> None:
+        if message.chat.id != settings.allowed_chat_id:
+            return
+
+        await message.answer(escape(_format_reply_visual_status(message)))
+
     @router.message()
     async def on_message(message: Message) -> None:
         if message.chat.id != settings.allowed_chat_id:
@@ -284,6 +433,7 @@ async def main() -> None:
             "/mood",
             "/ask",
             "/visual",
+            "/seen",
         )):
             return
         if message.from_user and message.from_user.id == bot_info.id:
@@ -317,7 +467,7 @@ async def main() -> None:
         )
 
         if settings.enable_image_processing and get_image_file_id(message) is not None:
-            asyncio.create_task(process_message_image(bot, message, settings=settings))
+            asyncio.create_task(_process_message_image_limited(bot, message, settings=settings))
 
         global _last_cleanup_ts, _messages_since_svin_reply
         _messages_since_svin_reply += 1
@@ -325,6 +475,25 @@ async def main() -> None:
         if now_ts - _last_cleanup_ts >= 3600:
             delete_messages_older_than(7)
             _last_cleanup_ts = now_ts
+
+        if settings.use_llm_topics and _is_addressed_to_bot(message, bot_info.username, bot_info.id):
+            question = _strip_bot_mention(text_content, bot_info.username)
+            if question:
+                visual_context = _build_reply_visual_context(message)
+                if message.reply_to_message and get_image_file_id(message.reply_to_message) and visual_context is None:
+                    await message.reply("Визуальный контекст этой картинки ещё не готов.")
+                    return
+
+                answer = try_answer_question(
+                    _build_question_with_context(question, visual_context),
+                    backend=settings.llm_backend,
+                    model=settings.llm_model,
+                    endpoint=settings.llm_endpoint,
+                    timeout=settings.llm_timeout,
+                )
+                if answer is not None:
+                    await message.reply(escape(answer))
+                    return
 
         today_messages_count = len(_get_chat_messages_by_day(date.today(), settings.allowed_chat_id))
         if settings.use_llm_topics and _should_try_svin_reply(today_messages_count):

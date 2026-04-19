@@ -70,6 +70,7 @@ BOT_PARSE_MODE=HTML
 DB_PATH=data/bot.sqlite3
 LOG_LEVEL=INFO
 ENABLE_IMAGE_PROCESSING=true
+MAX_IMAGE_FILE_SIZE_MB=20
 ```
 
 Примечание:
@@ -258,3 +259,16 @@ After changing `.env`:
 sudo systemctl restart telegram-bot
 sudo journalctl -u telegram-bot -n 100 --no-pager
 ```
+
+GIF support note:
+- Telegram `animation` messages are handled through their thumbnail when Telegram provides one.
+- This keeps GIF recognition lightweight and avoids adding ffmpeg or a heavy video pipeline.
+- If Telegram sends an animation without a thumbnail, the bot stores the normal message but skips visual hashing for that file.
+
+Visual safety/context notes:
+- `MAX_IMAGE_FILE_SIZE_MB` limits media downloads before processing, so very large image documents are skipped safely.
+- Image processing is throttled to one file at a time, so a burst of many images does not start many downloads/hash jobs in parallel.
+- `image_events.context_text` stores captions/context separately from weekly `messages`, so visual cluster labels can improve over roughly the last two months of image events.
+- Context backfill is gradual: only a small batch of old image events is enriched on each bot start, not the whole database at once.
+- `/ask` and direct replies/mentions can use known visual context from the replied image, but the bot does not run a full vision model.
+- `/seen` can be used as a reply to an image/GIF to check whether the file has already been studied, which cluster it belongs to, and whether it has a label.
