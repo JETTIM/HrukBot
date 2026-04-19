@@ -74,6 +74,21 @@ LOG_LEVEL=INFO
 Примечание:
 - `ALLOWED_CHAT_ID` для группы обычно отрицательный и начинается с `-100...`.
 
+Опционально для LLM-тем (llama.cpp-compatible endpoint):
+
+```env
+USE_LLM_TOPICS=false
+LLM_BACKEND=llama_cpp
+LLM_MODEL=local-model
+LLM_ENDPOINT=http://127.0.0.1:8080/v1/chat/completions
+LLM_TIMEOUT=10
+```
+
+Как это работает:
+- `USE_LLM_TOPICS=false`: всегда используется текущая rule-based логика из `app/topics.py`.
+- `USE_LLM_TOPICS=true`: сначала пробуем LLM для блоков "Основные темы" и "Характер обсуждения".
+- Если LLM недоступна/ошиблась/вернула невалидный JSON: автоматически включается fallback на rule-based без падения бота.
+
 ### 6. Проверить ручной запуск
 
 ```bash

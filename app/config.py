@@ -20,6 +20,11 @@ class Settings:
     bot_parse_mode: str = "HTML"
     db_path: Path = BASE_DIR / "data" / "bot.sqlite3"
     log_level: str = "INFO"
+    use_llm_topics: bool = False
+    llm_backend: str = "llama_cpp"
+    llm_model: str = ""
+    llm_endpoint: str = "http://127.0.0.1:8080/v1/chat/completions"
+    llm_timeout: float = 10.0
 
 
 def get_settings() -> Settings:
@@ -37,4 +42,13 @@ def get_settings() -> Settings:
         bot_parse_mode=os.getenv("BOT_PARSE_MODE", "HTML"),
         db_path=Path(os.getenv("DB_PATH", str(BASE_DIR / "data" / "bot.sqlite3"))),
         log_level=os.getenv("LOG_LEVEL", "INFO"),
+        use_llm_topics=_as_bool(os.getenv("USE_LLM_TOPICS", "false")),
+        llm_backend=os.getenv("LLM_BACKEND", "llama_cpp"),
+        llm_model=os.getenv("LLM_MODEL", ""),
+        llm_endpoint=os.getenv("LLM_ENDPOINT", "http://127.0.0.1:8080/v1/chat/completions"),
+        llm_timeout=float(os.getenv("LLM_TIMEOUT", "10")),
     )
+
+
+def _as_bool(value: str) -> bool:
+    return value.strip().lower() in {"1", "true", "yes", "on"}

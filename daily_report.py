@@ -10,6 +10,7 @@ from aiogram.client.default import DefaultBotProperties
 
 from app.config import get_settings
 from app.db import close_db, delete_messages_older_than, get_messages_by_day, init_db
+from app.llm_topics import try_extract_topics_and_summary
 from app.report import (
     build_discussion_character,
     calculate_daily_stats,
@@ -49,6 +50,36 @@ def build_user_names(messages: list[dict[str, Any]]) -> dict[int, str]:
 
 def build_topics_source(messages: list[dict[str, Any]]) -> list[str]:
     return [str(row.get("text") or "") for row in messages]
+
+
+def build_topics_and_summary_lines(
+    *,
+    messages: list[dict[str, Any]],
+    stats: Any,
+    user_names: dict[int, str],
+    settings: Any,
+) -> tuple[list[str], list[str]]:
+    if stats.total_messages == 0:
+        return (
+            ["Обсуждение пока короткое, выраженные темы не выделяются."],
+            ["на текущий момент сообщений почти нет"],
+        )
+
+    topic_source = build_topics_source(messages)
+    if settings.use_llm_topics:
+        llm_result = try_extract_topics_and_summary(
+            topic_source,
+            backend=settings.llm_backend,
+            model=settings.llm_model,
+            endpoint=settings.llm_endpoint,
+            timeout=settings.llm_timeout,
+        )
+        if llm_result is not None:
+            return llm_result
+
+    topics = extract_main_topics(topic_source, top_k=4)
+    summary_lines = build_discussion_character(stats=stats, topics=topics, user_names=user_names)
+    return topics, summary_lines
 
 
 def split_for_telegram(text: str, limit: int = MAX_TELEGRAM_MESSAGE_LENGTH) -> list[str]:
@@ -102,8 +133,12 @@ async def run_daily_report() -> None:
         user_names = build_user_names(messages)
 
         stats = calculate_daily_stats(messages)
-        topics = extract_main_topics(build_topics_source(messages), top_k=4)
-        character = build_discussion_character(stats=stats, topics=topics, user_names=user_names)
+        topics, character = build_topics_and_summary_lines(
+            messages=messages,
+            stats=stats,
+            user_names=user_names,
+            settings=settings,
+        )
         report_text = format_daily_report(
             report_date=previous_day,
             stats=stats,

@@ -12,9 +12,8 @@ from aiogram.types import Message
 
 from app.config import get_settings
 from app.db import close_db, delete_messages_older_than, get_messages_by_day, init_db, save_message
-from app.report import build_discussion_character, calculate_daily_stats, format_daily_report
-from app.topics import extract_main_topics
-from daily_report import build_topics_source, build_user_names
+from app.report import calculate_daily_stats, format_daily_report
+from daily_report import build_topics_and_summary_lines, build_user_names
 
 logger = logging.getLogger(__name__)
 _last_cleanup_ts: float = 0.0
@@ -72,12 +71,12 @@ async def main() -> None:
         user_names = build_user_names(messages)
 
         stats = calculate_daily_stats(messages)
-        if stats.total_messages == 0:
-            topics = ["Обсуждение пока короткое, выраженные темы не выделяются."]
-            character = ["на текущий момент сообщений почти нет"]
-        else:
-            topics = extract_main_topics(build_topics_source(messages), top_k=4)
-            character = build_discussion_character(stats=stats, topics=topics, user_names=user_names)
+        topics, character = build_topics_and_summary_lines(
+            messages=messages,
+            stats=stats,
+            user_names=user_names,
+            settings=settings,
+        )
 
         report_text = format_daily_report(
             report_date=today,
