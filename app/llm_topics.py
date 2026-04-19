@@ -9,16 +9,24 @@ from urllib.request import Request, urlopen
 
 logger = logging.getLogger(__name__)
 
-MAX_MESSAGES = 120
+MAX_MESSAGES = 1000
 MAX_INPUT_CHARS = 6000
 
 SYSTEM_PROMPT = (
-    "Ты анализируешь переписку на русском языке.\n"
-    "Верни только JSON без markdown и без пояснений.\n"
-    "Формат строго:\n"
-    '{\n  "topics": ["..."],\n  "summary_lines": ["..."]\n}\n'
-    'Требования: "topics" содержит 2-4 короткие темы. '
-    '"summary_lines" содержит 1-2 короткие фразы о характере обсуждения.'
+    "Ты анализируешь переписку Telegram-чата.\n"
+    "Отвечай только на русском языке.\n"
+    "Верни только JSON без markdown, без пояснений и без лишнего текста.\n"
+    "Формат ответа строго такой:\n"
+    '{\n'
+    '  "topics": ["..."],\n'
+    '  "summary_lines": ["..."]\n'
+    '}\n'
+    'Требования:\n'
+    '- "topics": 2-4 короткие темы обсуждения;\n'
+    '- "summary_lines": 1-2 короткие фразы о характере обсуждения;\n'
+    '- не придумывай темы, которых нет в сообщениях;\n'
+    '- не пересказывай диалог подробно;\n'
+    '- формулируй темы коротко и естественно.'
 )
 
 
@@ -45,13 +53,17 @@ def try_extract_topics_and_summary(
             {
                 "role": "user",
                 "content": (
-                    "Сообщения чата:\n"
-                    f"{prompt_input}\n\n"
-                    "Верни JSON с полями topics и summary_lines."
+                    "Ниже сообщения Telegram-чата за день.\n"
+                    "Нужно выделить 2-4 основные темы обсуждения и 1-2 короткие фразы "
+                    "для блока 'Характер обсуждения'.\n"
+                    "Ответ верни строго в JSON с полями topics и summary_lines.\n\n"
+                    "Сообщения:\n"
+                    f"{prompt_input}"
                 ),
             },
         ],
         "temperature": 0.2,
+        "max_tokens": 180,
         "response_format": {"type": "json_object"},
     }
 
