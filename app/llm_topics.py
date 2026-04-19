@@ -9,7 +9,7 @@ from urllib.request import Request, urlopen
 
 logger = logging.getLogger(__name__)
 
-MAX_MESSAGES = 1000
+MAX_MESSAGES = 500
 MAX_INPUT_CHARS = 6000
 
 SYSTEM_PROMPT = (
@@ -62,8 +62,8 @@ def try_extract_topics_and_summary(
                 ),
             },
         ],
-        "temperature": 0.2,
-        "max_tokens": 180,
+        "temperature": 0.3,
+        "max_tokens": 500,
         "response_format": {"type": "json_object"},
     }
 
