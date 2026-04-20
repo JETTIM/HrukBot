@@ -48,7 +48,7 @@ _last_cleanup_ts: float = 0.0
 _messages_since_svin_reply = 10
 _image_processing_semaphore: asyncio.Semaphore | None = None
 _svin_reply_chance = 0.03
-PENDING_TEXT = "вЏі С‰Р° РЅР°РїРёС€Сѓ..."
+PENDING_TEXT = "⏳ ща напишу..."
 PENDING_MIN_SECONDS = 1.0
 SHORT_MEMORY_MESSAGES = 10
 VISUAL_CONTEXT_WAIT_SECONDS = 3.0
@@ -89,7 +89,7 @@ def _get_chat_messages_by_day(day_value: date, chat_id: int) -> list[dict]:
 
 def _format_hour_window(hour: int) -> str:
     next_hour = (hour + 1) % 24
-    return f"{hour:02d}:00вЂ“{next_hour:02d}:00"
+    return f"{hour:02d}:00–{next_hour:02d}:00"
 
 
 def _estimate_minutes(messages_count: int) -> int:
@@ -99,10 +99,10 @@ def _estimate_minutes(messages_count: int) -> int:
 
 def _fallback_mood(messages_count: int) -> str:
     if messages_count >= 40:
-        return "С‡Р°С‚ Р°РєС‚РёРІРЅС‹Р№"
+        return "чат активный"
     if messages_count >= 10:
-        return "С‡Р°С‚ СѓРјРµСЂРµРЅРЅС‹Р№"
-    return "С‡Р°С‚ С‚РёС…РёР№"
+        return "чат умеренный"
+    return "чат тихий"
 
 
 def _build_topics_source(messages: list[dict]) -> list[str]:
@@ -187,10 +187,10 @@ def _normalize_reply_question(question: str, reply_text_context: str | None) -> 
     if not reply_text_context:
         return question
     return (
-        "РџРѕР»СЊР·РѕРІР°С‚РµР»СЊ РґР°Р» РѕС‡РµРЅСЊ РєРѕСЂРѕС‚РєСѓСЋ СЂРµРїР»РёРєСѓ РІ РѕС‚РІРµС‚ РЅР° РїСЂРµРґС‹РґСѓС‰РµРµ СЃРѕРѕР±С‰РµРЅРёРµ Р±РѕС‚Р°. "
-        "РџСЂРѕРґРѕР»Р¶Рё РјС‹СЃР»СЊ РїРѕ РєРѕРЅС‚РµРєСЃС‚Сѓ РїСЂРµРґС‹РґСѓС‰РµРіРѕ РѕС‚РІРµС‚Р° Рё СѓС‚РѕС‡РЅРё, С‡С‚Рѕ РёРјРµРЅРЅРѕ РёРјРµР»РѕСЃСЊ РІ РІРёРґСѓ.\n\n"
-        f"РљРѕСЂРѕС‚РєР°СЏ СЂРµРїР»РёРєР° РїРѕР»СЊР·РѕРІР°С‚РµР»СЏ: {question}\n"
-        f"РџСЂРµРґС‹РґСѓС‰РµРµ СЃРѕРѕР±С‰РµРЅРёРµ Р±РѕС‚Р°: {reply_text_context}"
+        "Пользователь дал очень короткую реплику в ответ на предыдущее сообщение бота. "
+        "Продолжи мысль по контексту предыдущего ответа и уточни, что именно имелось в виду.\n\n"
+        f"Короткая реплика пользователя: {question}\n"
+        f"Предыдущее сообщение бота: {reply_text_context}"
     )
 
 
@@ -207,7 +207,7 @@ def _build_reply_visual_context(message: Message) -> str | None:
 
     status = str(event.get("processing_status") or "")
     if status != "processed":
-        return "Р’РёР·СѓР°Р»СЊРЅС‹Р№ РєРѕРЅС‚РµРєСЃС‚ reply-СЃРѕРѕР±С‰РµРЅРёСЏ РїРѕРєР° РЅРµ РѕР±СЂР°Р±РѕС‚Р°РЅ."
+        return "Визуальный контекст reply-сообщения пока не обработан."
 
     parts: list[str] = []
     cluster_id = event.get("cluster_id")
@@ -220,17 +220,17 @@ def _build_reply_visual_context(message: Message) -> str | None:
     if cluster_id:
         parts.append(f"visual cluster #{cluster_id}")
     if usage_count:
-        parts.append(f"РїРѕРІС‚РѕСЂРѕРІ РІ РїР°РјСЏС‚Рё: {usage_count}")
+        parts.append(f"повторов в памяти: {usage_count}")
     if cluster_summary:
-        parts.append(f"РѕРїРёСЃР°РЅРёРµ РєР»Р°СЃС‚РµСЂР°: {cluster_summary}")
+        parts.append(f"описание кластера: {cluster_summary}")
     if summary_text and summary_text != cluster_summary:
         parts.append(f"OCR/label: {summary_text}")
     if ocr_text:
-        parts.append(f"OCR С‚РµРєСЃС‚: {' '.join(ocr_text.split())[:500]}")
+        parts.append(f"OCR текст: {' '.join(ocr_text.split())[:500]}")
     if context_text:
         parts.append(f"caption/context: {context_text[:500]}")
 
-    return "\n".join(parts) if parts else "РљР°СЂС‚РёРЅРєР° Р·РЅР°РєРѕРјР°, РЅРѕ РѕСЃРјС‹СЃР»РµРЅРЅРѕРіРѕ РѕРїРёСЃР°РЅРёСЏ РїРѕРєР° РЅРµС‚."
+    return "\n".join(parts) if parts else "Картинка знакома, но осмысленного описания пока нет."
 
 
 async def _wait_for_reply_visual_context(message: Message) -> str | None:
@@ -251,19 +251,19 @@ async def _wait_for_reply_visual_context(message: Message) -> str | None:
 
 def _format_reply_visual_status(message: Message) -> str:
     if not ENABLE_VISUAL_FEATURES:
-        return "Р’РёР·СѓР°Р»СЊРЅР°СЏ РѕР±СЂР°Р±РѕС‚РєР° РІСЂРµРјРµРЅРЅРѕ РѕС‚РєР»СЋС‡РµРЅР°."
+        return "Визуальная обработка временно отключена."
     reply = message.reply_to_message
     if not reply:
-        return "РћС‚РІРµС‚СЊ РєРѕРјР°РЅРґРѕР№ /seen РЅР° РєР°СЂС‚РёРЅРєСѓ, GIF РёР»Рё image-С„Р°Р№Р»."
+        return "Ответь командой /seen на картинку, GIF или image-файл."
 
     if get_image_file_id(reply) is None:
-        return "Р’ reply-СЃРѕРѕР±С‰РµРЅРёРё РЅРµС‚ РєР°СЂС‚РёРЅРєРё/GIF/image-С„Р°Р№Р»Р°."
+        return "В reply-сообщении нет картинки/GIF/image-файла."
 
     event = get_image_event_by_message(chat_id=reply.chat.id, message_id=reply.message_id)
     if not event:
         return (
-            "Р­С‚РѕС‚ С„Р°Р№Р» РµС‰С‘ РЅРµ РёР·СѓС‡Р°Р»СЃСЏ.\n"
-            "Р’РѕР·РјРѕР¶РЅС‹Рµ РїСЂРёС‡РёРЅС‹: Р±РѕС‚ РїРѕР»СѓС‡РёР» РµРіРѕ РґРѕ РІРєР»СЋС‡РµРЅРёСЏ РІРёР·СѓР°Р»СЊРЅРѕР№ РїР°РјСЏС‚Рё, РѕР±СЂР°Р±РѕС‚РєР° РѕС‚РєР»СЋС‡РµРЅР° РёР»Рё СЃРѕР±С‹С‚РёРµ РµС‰С‘ РЅРµ РґРѕС€Р»Рѕ РґРѕ С„РѕРЅРѕРІРѕР№ Р·Р°РґР°С‡Рё."
+            "Этот файл ещё не изучался.\n"
+            "Возможные причины: бот получил его до включения визуальной памяти, обработка отключена или событие ещё не дошло до фоновой задачи."
         )
 
     status = str(event.get("processing_status") or "unknown")
@@ -274,28 +274,28 @@ def _format_reply_visual_status(message: Message) -> str:
     summary_text = str(event.get("summary_text") or "").strip()
     processed_at = str(event.get("processed_at") or "").strip()
 
-    lines = ["РџСЂРѕРІРµСЂРєР° С„Р°Р№Р»Р°:"]
+    lines = ["Проверка файла:"]
     if status == "processed":
-        lines.append("вЂ” СЃС‚Р°С‚СѓСЃ: РёР·СѓС‡РµРЅ")
+        lines.append("— статус: изучен")
     elif status == "failed":
-        lines.append("вЂ” СЃС‚Р°С‚СѓСЃ: РЅРµ РёР·СѓС‡РµРЅ, РѕР±СЂР°Р±РѕС‚РєР° РЅРµ СѓРґР°Р»Р°СЃСЊ РёР»Рё С„Р°Р№Р» Р±С‹Р» РїСЂРѕРїСѓС‰РµРЅ")
+        lines.append("— статус: не изучен, обработка не удалась или файл был пропущен")
     else:
-        lines.append(f"вЂ” СЃС‚Р°С‚СѓСЃ: {status}")
+        lines.append(f"— статус: {status}")
 
     if cluster_id:
-        lines.append(f"вЂ” cluster: #{cluster_id}")
+        lines.append(f"— cluster: #{cluster_id}")
     if usage_count:
-        lines.append(f"вЂ” РїРѕРІС‚РѕСЂРѕРІ РІ РїР°РјСЏС‚Рё: {usage_count}")
+        lines.append(f"— повторов в памяти: {usage_count}")
     if file_size:
-        lines.append(f"вЂ” СЂР°Р·РјРµСЂ: ~{int(file_size) // 1024} KB")
+        lines.append(f"— размер: ~{int(file_size) // 1024} KB")
     if cluster_summary:
-        lines.append(f"вЂ” РѕРїРёСЃР°РЅРёРµ: {cluster_summary}")
+        lines.append(f"— описание: {cluster_summary}")
     elif summary_text:
-        lines.append(f"вЂ” OCR/label: {summary_text}")
+        lines.append(f"— OCR/label: {summary_text}")
     else:
-        lines.append("вЂ” РѕРїРёСЃР°РЅРёРµ: РїРѕРєР° РЅРµС‚")
+        lines.append("— описание: пока нет")
     if processed_at:
-        lines.append(f"вЂ” РѕР±СЂР°Р±РѕС‚Р°РЅ: {processed_at}")
+        lines.append(f"— обработан: {processed_at}")
 
     return "\n".join(lines)
 
@@ -343,9 +343,9 @@ def _build_question_with_context(
     if not visual_context and not reply_text_context and not short_memory:
         return question
     parts = [
-        "РџРѕР»СЊР·РѕРІР°С‚РµР»СЊ СЃРїСЂР°С€РёРІР°РµС‚ РІ Telegram-С‡Р°С‚Рµ.",
-        "РћС‚РІРµС‚СЊ РЅР° СЂСѓСЃСЃРєРѕРј, РєРѕСЂРѕС‚РєРѕ Рё РїРѕ РґРµР»Сѓ.",
-        f"Р’РѕРїСЂРѕСЃ РїРѕР»СЊР·РѕРІР°С‚РµР»СЏ: {question}",
+        "Пользователь спрашивает в Telegram-чате.",
+        "Ответь на русском, коротко и по делу.",
+        f"Вопрос пользователя: {question}",
     ]
     if short_memory:
         parts.append(
@@ -353,12 +353,12 @@ def _build_question_with_context(
             f"{short_memory}"
         )
     if reply_text_context:
-        parts.append(f"РЎРѕРѕР±С‰РµРЅРёРµ Р±РѕС‚Р°, РЅР° РєРѕС‚РѕСЂРѕРµ РѕС‚РІРµС‚РёР» РїРѕР»СЊР·РѕРІР°С‚РµР»СЊ:\n{reply_text_context}")
+        parts.append(f"Сообщение бота, на которое ответил пользователь:\n{reply_text_context}")
     if visual_context:
         parts.append(
-            "Р•СЃР»Рё РІРѕРїСЂРѕСЃ РѕС‚РЅРѕСЃРёС‚СЃСЏ Рє reply-РєР°СЂС‚РёРЅРєРµ, РёСЃРїРѕР»СЊР·СѓР№ С‚РѕР»СЊРєРѕ СЃРѕС…СЂР°РЅС‘РЅРЅС‹Р№ РІРёР·СѓР°Р»СЊРЅС‹Р№ РєРѕРЅС‚РµРєСЃС‚ РЅРёР¶Рµ. "
-            "РќРµ СѓС‚РІРµСЂР¶РґР°Р№, С‡С‚Рѕ РІРёРґРёС€СЊ РёР·РѕР±СЂР°Р¶РµРЅРёРµ РЅР°РїСЂСЏРјСѓСЋ.\n"
-            f"Р’РёР·СѓР°Р»СЊРЅС‹Р№ РєРѕРЅС‚РµРєСЃС‚ reply-СЃРѕРѕР±С‰РµРЅРёСЏ:\n{visual_context}"
+            "Если вопрос относится к reply-картинке, используй только сохранённый визуальный контекст ниже. "
+            "Не утверждай, что видишь изображение напрямую.\n"
+            f"Визуальный контекст reply-сообщения:\n{visual_context}"
         )
     return "\n\n".join(parts)
 
@@ -370,7 +370,7 @@ def _normalize_llm_text_block(text: str, max_lines: int = 3) -> str:
         if not line:
             continue
         line = line.replace("**", "").replace("__", "").replace("`", "")
-        for prefix in ("- ", "вЂ” ", "вЂў ", "* ", ". "):
+        for prefix in ("- ", "— ", "• ", "* ", ". "):
             if line.startswith(prefix):
                 line = line[len(prefix):].strip()
         if line and line[0].isdigit() and len(line) > 2 and line[1] in {".", ")"}:
@@ -417,18 +417,18 @@ async def _finish_pending(pending_message: Message, started_at: float, text: str
 
 def _format_visual_memory(limit: int = 8) -> str:
     if not ENABLE_VISUAL_FEATURES:
-        return "Р’РёР·СѓР°Р»СЊРЅР°СЏ РїР°РјСЏС‚СЊ РІСЂРµРјРµРЅРЅРѕ РѕС‚РєР»СЋС‡РµРЅР°."
+        return "Визуальная память временно отключена."
     clusters = get_top_image_clusters(limit=limit)
     if not clusters:
-        return "Р’РёР·СѓР°Р»СЊРЅР°СЏ РїР°РјСЏС‚СЊ РїРѕРєР° РїСѓСЃС‚Р°СЏ."
+        return "Визуальная память пока пустая."
 
-    lines = ["Р’РёР·СѓР°Р»СЊРЅР°СЏ РїР°РјСЏС‚СЊ:"]
+    lines = ["Визуальная память:"]
     for cluster in clusters:
         cluster_id = int(cluster["cluster_id"])
         usage_count = int(cluster["usage_count"])
         summary = str(cluster.get("cluster_summary") or "").strip()
-        label = summary if summary else "РїРѕРєР° Р±РµР· РѕРїРёСЃР°РЅРёСЏ"
-        lines.append(f"вЂ” #{cluster_id}: {label} ({usage_count} СЂР°Р·)")
+        label = summary if summary else "пока без описания"
+        lines.append(f"— #{cluster_id}: {label} ({usage_count} раз)")
     return "\n".join(lines)
 
 
@@ -487,10 +487,10 @@ async def main() -> None:
             topics=topics,
             character_phrases=character,
             user_names=user_names,
-            title_prefix="рџ“Љ РќР° РґР°РЅРЅС‹Р№ РјРѕРјРµРЅС‚ Р·Р°",
+            title_prefix="📊 На данный момент за",
         )
         if settings.use_llm_topics and stats.total_messages > 0 and not used_llm_topics:
-            report_text = f"{report_text}\n\nРїСѓ-РїСѓ-РїСѓ С‚РµС…РЅРёС‡РµСЃРєРёРµ С€РѕРєРѕР»Р°РґРєРё"
+            report_text = f"{report_text}\n\nпу-пу-пу технические шоколадки"
         await _finish_pending(pending_message, pending_started, report_text)
 
     @router.message(Command("dead"))
@@ -506,16 +506,16 @@ async def main() -> None:
 
         if yesterday_count == 0:
             text = (
-                "в пёЏ РђРєС‚РёРІРЅРѕСЃС‚СЊ С‡Р°С‚Р°\n\n"
-                f"вЂ” СЃРµРіРѕРґРЅСЏ: {today_count} СЃРѕРѕР±С‰РµРЅРёР№\n"
-                f"вЂ” РІС‡РµСЂР°: {yesterday_count} СЃРѕРѕР±С‰РµРЅРёР№"
+                "☠️ Активность чата\n\n"
+                f"— сегодня: {today_count} сообщений\n"
+                f"— вчера: {yesterday_count} сообщений"
             )
         else:
             death_percent = 100 - (today_count / yesterday_count * 100)
             text = (
-                f"в пёЏ Р§Р°С‚ РјС‘СЂС‚РІ РЅР° {death_percent:.0f}%\n\n"
-                f"вЂ” СЃРµРіРѕРґРЅСЏ: {today_count} СЃРѕРѕР±С‰РµРЅРёР№\n"
-                f"вЂ” РІС‡РµСЂР°: {yesterday_count} СЃРѕРѕР±С‰РµРЅРёР№"
+                f"☠️ Чат мёртв на {death_percent:.0f}%\n\n"
+                f"— сегодня: {today_count} сообщений\n"
+                f"— вчера: {yesterday_count} сообщений"
             )
         await _finish_pending(pending_message, pending_started, text)
 
@@ -528,9 +528,9 @@ async def main() -> None:
         pending_message, pending_started = await _send_pending(message)
         messages_count = len(_get_chat_messages_by_day(date.today(), settings.allowed_chat_id))
         text = (
-            "вЏі РЎРµРіРѕРґРЅСЏ:\n\n"
-            f"вЂ” СЃРѕРѕР±С‰РµРЅРёР№: {messages_count}\n"
-            f"вЂ” РїСЂРёРјРµСЂРЅРѕРµ РІСЂРµРјСЏ: ~{_estimate_minutes(messages_count)} РјРёРЅСѓС‚"
+            "⏳ Сегодня:\n\n"
+            f"— сообщений: {messages_count}\n"
+            f"— примерное время: ~{_estimate_minutes(messages_count)} минут"
         )
         await _finish_pending(pending_message, pending_started, text)
 
@@ -547,10 +547,10 @@ async def main() -> None:
         quiet_hour, _ = min(hourly.items(), key=lambda item: item[1])
 
         text = (
-            "вЏ° РџРёРє Р°РєС‚РёРІРЅРѕСЃС‚Рё:\n\n"
-            f"вЂ” {_format_hour_window(peak_hour)} ({peak_count} СЃРѕРѕР±С‰РµРЅРёР№)\n\n"
-            "рџ“‰ РЎР°РјРѕРµ С‚РёС…РѕРµ РІСЂРµРјСЏ:\n"
-            f"вЂ” {_format_hour_window(quiet_hour)}"
+            "⏰ Пик активности:\n\n"
+            f"— {_format_hour_window(peak_hour)} ({peak_count} сообщений)\n\n"
+            "📉 Самое тихое время:\n"
+            f"— {_format_hour_window(quiet_hour)}"
         )
         await _finish_pending(pending_message, pending_started, text)
 
@@ -593,7 +593,7 @@ async def main() -> None:
         if joke is not None:
             await _finish_pending(pending_message, pending_started, escape(joke))
             return
-        await _finish_pending(pending_message, pending_started, "РќРµ СЃРјРѕРіР»Р° РїСЂРёРґСѓРјР°С‚СЊ РЅРѕСЂРјР°Р»СЊРЅС‹Р№ Р°РЅРµРєРґРѕС‚.")
+        await _finish_pending(pending_message, pending_started, "Не смогла придумать нормальный анекдот.")
 
     @router.message(Command("ask"))
     async def on_ask(message: Message) -> None:
@@ -608,12 +608,12 @@ async def main() -> None:
             await message.answer("Напиши вопрос после команды: /ask что спросить")
             return
         if not settings.use_llm_topics:
-            await message.answer("LLM СЃРµР№С‡Р°СЃ РІС‹РєР»СЋС‡РµРЅР°.")
+            await message.answer("LLM сейчас выключена.")
             return
 
         visual_context = await _wait_for_reply_visual_context(message)
         if _reply_has_visual_file(message) and visual_context is None:
-            await message.answer("Р’РёР·СѓР°Р»СЊРЅС‹Р№ РєРѕРЅС‚РµРєСЃС‚ СЌС‚РѕР№ РєР°СЂС‚РёРЅРєРё РµС‰С‘ РЅРµ РіРѕС‚РѕРІ.")
+            await message.answer("Визуальный контекст этой картинки ещё не готов.")
             return
 
         pending_message, pending_started = await _send_pending(message)
@@ -632,7 +632,7 @@ async def main() -> None:
             timeout=settings.llm_timeout,
         )
         if answer is None:
-            await _finish_pending(pending_message, pending_started, "РќРµ СЃРјРѕРіР»Р° РїРѕР»СѓС‡РёС‚СЊ РѕС‚РІРµС‚ РѕС‚ LLM.")
+            await _finish_pending(pending_message, pending_started, "Не смогла получить ответ от LLM.")
             return
         await _finish_pending(pending_message, pending_started, escape(answer))
 
@@ -665,7 +665,7 @@ async def main() -> None:
         step = 0.01
 
         if not args:
-            await message.answer(f"РўРµРєСѓС‰РёР№ С€Р°РЅСЃ СЃР»СѓС‡Р°Р№РЅРѕРіРѕ РєРѕРјРјРµРЅС‚Р°СЂРёСЏ: {_svin_reply_chance * 100:.1f}%")
+            await message.answer(f"Текущий шанс случайного комментария: {_svin_reply_chance * 100:.1f}%")
             return
 
         if args in {"+", "up", "more", "plus"}:
@@ -682,8 +682,8 @@ async def main() -> None:
                 return
 
         await message.answer(
-            f"РЁР°РЅСЃ СЃР»СѓС‡Р°Р№РЅРѕРіРѕ РєРѕРјРјРµРЅС‚Р°СЂРёСЏ: {_svin_reply_chance * 100:.1f}%\n"
-            "Р—РЅР°С‡РµРЅРёРµ РґРµР№СЃС‚РІСѓРµС‚ РґРѕ РїРµСЂРµР·Р°РїСѓСЃРєР° Р±РѕС‚Р°."
+            f"Шанс случайного комментария: {_svin_reply_chance * 100:.1f}%\n"
+            "Значение действует до перезапуска бота."
         )
 
     @router.message(Command("roast"))
@@ -697,7 +697,7 @@ async def main() -> None:
             await message.answer("РСЃРїРѕР»СЊР·СѓР№: /roast @username")
             return
         if not settings.use_llm_topics:
-            await message.answer("LLM СЃРµР№С‡Р°СЃ РІС‹РєР»СЋС‡РµРЅР°.")
+            await message.answer("LLM сейчас выключена.")
             return
 
         pending_message, pending_started = await _send_pending(message)
@@ -709,7 +709,7 @@ async def main() -> None:
             timeout=settings.llm_timeout,
         )
         if roast is None:
-            await _finish_pending(pending_message, pending_started, "РќРµ СЃРјРѕРіР»Р° СЃРґРµР»Р°С‚СЊ РїСЂРѕР¶Р°СЂРєСѓ, РїРѕРїСЂРѕР±СѓР№ РµС‰С‘ СЂР°Р·.")
+            await _finish_pending(pending_message, pending_started, "Не смогла сделать прожарку, попробуй ещё раз.")
             return
         await _finish_pending(pending_message, pending_started, escape(_normalize_llm_text_block(roast, max_lines=2)))
 
@@ -785,7 +785,7 @@ async def main() -> None:
 
         if addressed_to_bot:
             if not settings.use_llm_topics:
-                await message.reply("LLM СЃРµР№С‡Р°СЃ РІС‹РєР»СЋС‡РµРЅР°.")
+                await message.reply("LLM сейчас выключена.")
                 return
 
             question_raw = _strip_bot_mention(text_content, bot_info.username)
@@ -795,7 +795,7 @@ async def main() -> None:
                 visual_context = await _wait_for_reply_visual_context(message)
                 short_memory = _build_short_chat_memory(message.chat.id, message.message_id)
                 if _reply_has_visual_file(message) and visual_context is None:
-                    await message.reply("Р’РёР·СѓР°Р»СЊРЅС‹Р№ РєРѕРЅС‚РµРєСЃС‚ СЌС‚РѕР№ РєР°СЂС‚РёРЅРєРё РµС‰С‘ РЅРµ РіРѕС‚РѕРІ.")
+                    await message.reply("Визуальный контекст этой картинки ещё не готов.")
                     return
 
                 pending_message, pending_started = await _send_pending(message, reply=True)
@@ -809,7 +809,7 @@ async def main() -> None:
                 if answer is not None:
                     await _finish_pending(pending_message, pending_started, escape(answer))
                     return
-                await _finish_pending(pending_message, pending_started, "РќРµ СЃРјРѕРіР»Р° РїРѕР»СѓС‡РёС‚СЊ РѕС‚РІРµС‚ РѕС‚ LLM.")
+                await _finish_pending(pending_message, pending_started, "Не смогла получить ответ от LLM.")
                 return
 
         today_messages_count = len(_get_chat_messages_by_day(date.today(), settings.allowed_chat_id))
