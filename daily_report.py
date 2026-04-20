@@ -136,7 +136,7 @@ def split_for_telegram(text: str, limit: int = MAX_TELEGRAM_MESSAGE_LENGTH) -> l
 
 async def send_report(bot: Bot, chat_id: int, text: str) -> None:
     for part in split_for_telegram(text):
-        await bot.send_message(chat_id=chat_id, text=part)
+        await bot.send_message(chat_id=chat_id, text=part, disable_notification=True)
 
 
 async def run_daily_report() -> None:

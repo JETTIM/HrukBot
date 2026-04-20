@@ -404,8 +404,8 @@ async def _process_message_image_limited(bot: Bot, message: Message, settings: o
 async def _send_pending(message: Message, *, reply: bool = False) -> tuple[Message, float]:
     started_at = time.monotonic()
     if reply:
-        return await message.reply(PENDING_TEXT), started_at
-    return await message.answer(PENDING_TEXT), started_at
+        return await message.reply(PENDING_TEXT, disable_notification=True), started_at
+    return await message.answer(PENDING_TEXT, disable_notification=True), started_at
 
 
 async def _finish_pending(pending_message: Message, started_at: float, text: str) -> None:
@@ -605,15 +605,15 @@ async def main() -> None:
         if not question and reply_text_context:
             question = "продолжи предыдущую мысль и уточни ответ"
         if not question:
-            await message.answer("Напиши вопрос после команды: /ask что спросить")
+            await message.answer("Напиши вопрос после команды: /ask что спросить", disable_notification=True)
             return
         if not settings.use_llm_topics:
-            await message.answer("LLM сейчас выключена.")
+            await message.answer("LLM сейчас выключена.", disable_notification=True)
             return
 
         visual_context = await _wait_for_reply_visual_context(message)
         if _reply_has_visual_file(message) and visual_context is None:
-            await message.answer("Визуальный контекст этой картинки ещё не готов.")
+            await message.answer("Визуальный контекст этой картинки ещё не готов.", disable_notification=True)
             return
 
         pending_message, pending_started = await _send_pending(message)
@@ -665,7 +665,10 @@ async def main() -> None:
         step = 0.01
 
         if not args:
-            await message.answer(f"Текущий шанс случайного комментария: {_svin_reply_chance * 100:.1f}%")
+            await message.answer(
+                f"Текущий шанс случайного комментария: {_svin_reply_chance * 100:.1f}%",
+                disable_notification=True,
+            )
             return
 
         if args in {"+", "up", "more", "plus"}:
@@ -678,12 +681,16 @@ async def main() -> None:
                 _svin_reply_chance = raw / 100.0 if raw > 1 else raw
                 _svin_reply_chance = max(0.0, min(1.0, _svin_reply_chance))
             except ValueError:
-                await message.answer("Используй: /chance, /chance +, /chance -, /chance 7")
+                await message.answer(
+                    "Используй: /chance, /chance +, /chance -, /chance 7",
+                    disable_notification=True,
+                )
                 return
 
         await message.answer(
             f"Шанс случайного комментария: {_svin_reply_chance * 100:.1f}%\n"
-            "Значение действует до перезапуска бота."
+            "Значение действует до перезапуска бота.",
+            disable_notification=True,
         )
 
     @router.message(Command("roast"))
@@ -694,10 +701,10 @@ async def main() -> None:
 
         target = _extract_command_args(message).strip()
         if not target:
-            await message.answer("Используй: /roast @username")
+            await message.answer("Используй: /roast @username", disable_notification=True)
             return
         if not settings.use_llm_topics:
-            await message.answer("LLM сейчас выключена.")
+            await message.answer("LLM сейчас выключена.", disable_notification=True)
             return
 
         pending_message, pending_started = await _send_pending(message)
@@ -785,7 +792,7 @@ async def main() -> None:
 
         if addressed_to_bot:
             if not settings.use_llm_topics:
-                await message.reply("LLM сейчас выключена.")
+                await message.reply("LLM сейчас выключена.", disable_notification=True)
                 return
 
             question_raw = _strip_bot_mention(text_content, bot_info.username)
@@ -795,7 +802,7 @@ async def main() -> None:
                 visual_context = await _wait_for_reply_visual_context(message)
                 short_memory = _build_short_chat_memory(message.chat.id, message.message_id)
                 if _reply_has_visual_file(message) and visual_context is None:
-                    await message.reply("Визуальный контекст этой картинки ещё не готов.")
+                    await message.reply("Визуальный контекст этой картинки ещё не готов.", disable_notification=True)
                     return
 
                 pending_message, pending_started = await _send_pending(message, reply=True)
@@ -822,7 +829,7 @@ async def main() -> None:
                 timeout=settings.llm_timeout,
             )
             if comment is not None:
-                await message.reply(escape(comment))
+                await message.reply(escape(comment), disable_notification=True)
                 _messages_since_svin_reply = 0
 
     dp.include_router(router)
