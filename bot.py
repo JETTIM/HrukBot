@@ -349,7 +349,7 @@ def _build_question_with_context(
     ]
     if short_memory:
         parts.append(
-            "РљРѕСЂРѕС‚РєРёР№ РєРѕРЅС‚РµРєСЃС‚ РїРѕСЃР»РµРґРЅРёС… СЃРѕРѕР±С‰РµРЅРёР№. РСЃРїРѕР»СЊР·СѓР№ РµРіРѕ С‚РѕР»СЊРєРѕ РµСЃР»Рё РѕРЅ РїРѕРјРѕРіР°РµС‚ РїРѕРЅСЏС‚СЊ РІРѕРїСЂРѕСЃ:\n"
+            "Короткий контекст последних сообщений. Используй его только если он помогает понять вопрос:\n"
             f"{short_memory}"
         )
     if reply_text_context:
@@ -678,7 +678,7 @@ async def main() -> None:
                 _svin_reply_chance = raw / 100.0 if raw > 1 else raw
                 _svin_reply_chance = max(0.0, min(1.0, _svin_reply_chance))
             except ValueError:
-                await message.answer("РСЃРїРѕР»СЊР·СѓР№: /chance, /chance +, /chance -, /chance 7")
+                await message.answer("Используй: /chance, /chance +, /chance -, /chance 7")
                 return
 
         await message.answer(
@@ -694,7 +694,7 @@ async def main() -> None:
 
         target = _extract_command_args(message).strip()
         if not target:
-            await message.answer("РСЃРїРѕР»СЊР·СѓР№: /roast @username")
+            await message.answer("Используй: /roast @username")
             return
         if not settings.use_llm_topics:
             await message.answer("LLM сейчас выключена.")
