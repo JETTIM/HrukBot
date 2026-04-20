@@ -141,7 +141,7 @@ def _extract_question_or_visual_default(message: Message) -> str:
     if question.strip():
         return question
     if _reply_has_visual_file(message):
-        return "С‡С‚Рѕ РЅР° РєР°СЂС‚РёРЅРєРµ?"
+        return "что на картинке?"
     return ""
 
 
@@ -177,7 +177,7 @@ def _is_low_info_question(text: str) -> bool:
         return True
     if len(cleaned) <= 2:
         return True
-    low_info_tokens = {"Р°", "РЅСѓ", "РѕРє", "Р°РіР°", "С‡Рѕ", "С‡Рµ", "?", ".", "??", "..." }
+    low_info_tokens = {"а", "ну", "ок", "ага", "чо", "че", "?", ".", "??", "..."}
     return cleaned in low_info_tokens
 
 
@@ -599,7 +599,6 @@ async def main() -> None:
     async def on_ask(message: Message) -> None:
         if message.chat.id != settings.allowed_chat_id:
             return
-        await _safe_delete_command_message(bot, message)
 
         question = _extract_question_or_visual_default(message)
         reply_text_context = _build_reply_text_context(message, bot_info.username, bot_info.id)
