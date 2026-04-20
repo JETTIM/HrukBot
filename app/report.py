@@ -174,7 +174,7 @@ def format_daily_report(
     lines.extend(_format_activity_block(stats.messages_by_user, user_names))
     lines.append("")
 
-    lines.append("📝 По объему:")
+    lines.append("📝 По объёму:")
     lines.extend(_format_volume_block(stats.chars_by_user, user_names))
     lines.append("")
 
