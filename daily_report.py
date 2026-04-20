@@ -53,6 +53,16 @@ def build_topics_source(messages: list[dict[str, Any]]) -> list[str]:
     return [str(row.get("text") or "") for row in messages]
 
 
+def _is_summary_too_similar_to_topics(topics: list[str], summary_lines: list[str]) -> bool:
+    normalized_topics = {topic.strip().lower() for topic in topics if topic.strip()}
+    normalized_summary = [line.strip().lower() for line in summary_lines if line.strip()]
+    if not normalized_topics or not normalized_summary:
+        return False
+
+    equal_hits = sum(1 for line in normalized_summary if line in normalized_topics)
+    return equal_hits >= min(2, len(normalized_summary))
+
+
 def build_topics_and_summary_lines(
     *,
     messages: list[dict[str, Any]],
@@ -85,6 +95,14 @@ def build_topics_and_summary_lines(
         logger.info("LLM topics used")
         used_llm = True
         topics, summary_lines = llm_result
+        if _is_summary_too_similar_to_topics(topics, summary_lines):
+            logger.info("LLM summary duplicated topics; using rule-based character lines")
+            summary_lines = build_discussion_character(
+                stats=stats,
+                topics=topics,
+                user_names=user_names,
+                max_phrases=3,
+            )
         return (topics, summary_lines, used_llm) if return_meta else (topics, summary_lines)
 
     logger.warning("LLM topics fallback used")

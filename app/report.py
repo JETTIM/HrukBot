@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date, datetime
@@ -8,16 +8,16 @@ MessageRow = Mapping[str, Any]
 
 PERIODS_ORDER = ("night", "morning", "day", "evening")
 PERIOD_LABELS = {
-    "night": "ночь",
-    "morning": "утро",
-    "day": "день",
-    "evening": "вечер",
+    "night": "РЅРѕС‡СЊ",
+    "morning": "СѓС‚СЂРѕ",
+    "day": "РґРµРЅСЊ",
+    "evening": "РІРµС‡РµСЂ",
 }
 PERIOD_INSTRUMENTAL = {
-    "night": "ночью",
-    "morning": "утром",
-    "day": "днем",
-    "evening": "вечером",
+    "night": "РЅРѕС‡СЊСЋ",
+    "morning": "СѓС‚СЂРѕРј",
+    "day": "РґРЅРµРј",
+    "evening": "РІРµС‡РµСЂРѕРј",
 }
 
 
@@ -129,34 +129,37 @@ def build_discussion_character(
     stats: DailyStats,
     topics: Sequence[str],
     user_names: Mapping[int, str] | None = None,
-    max_phrases: int = 2,
+    max_phrases: int = 3,
 ) -> list[str]:
     """
-    Build 1-2 short phrases for "Характер обсуждения" block.
+    Build 1-2 short phrases for "РҐР°СЂР°РєС‚РµСЂ РѕР±СЃСѓР¶РґРµРЅРёСЏ" block.
     Rules are simple and deterministic (no NLP).
     """
-    phrases_limit = 1 if max_phrases <= 1 else 2
+    phrases_limit = max(1, min(3, max_phrases))
 
     if stats.total_messages < 3 or _topics_indicate_short_discussion(topics):
-        return ["обсуждение было коротким и без выраженного доминирования тем"]
+        return ["РѕР±СЃСѓР¶РґРµРЅРёРµ Р±С‹Р»Рѕ РєРѕСЂРѕС‚РєРёРј Рё Р±РµР· РІС‹СЂР°Р¶РµРЅРЅРѕРіРѕ РґРѕРјРёРЅРёСЂРѕРІР°РЅРёСЏ С‚РµРј"]
 
     phrases: list[str] = []
 
     main_topic = _pick_main_topic(topics)
     if main_topic:
-        phrases.append(f"больше всего обсуждали {main_topic}")
+        phrases.append(f"Р±РѕР»СЊС€Рµ РІСЃРµРіРѕ РѕР±СЃСѓР¶РґР°Р»Рё {main_topic}")
+        second_topic = _pick_secondary_topic(topics, main_topic)
+        if second_topic and len(phrases) < phrases_limit:
+            phrases.append(f"РїР°СЂР°Р»Р»РµР»СЊРЅРѕ РѕР±СЃСѓР¶РґР°Р»Рё {second_topic}")
 
     dominant_user = _pick_dominant_user(stats.messages_by_user)
     if dominant_user is not None and len(phrases) < phrases_limit:
         user_name = _resolve_user_name(dominant_user, user_names)
-        phrases.append(f"основную активность задавал {user_name}")
+        phrases.append(f"РѕСЃРЅРѕРІРЅСѓСЋ Р°РєС‚РёРІРЅРѕСЃС‚СЊ Р·Р°РґР°РІР°Р» {user_name}")
 
     if len(phrases) < phrases_limit and stats.most_active_period in PERIOD_INSTRUMENTAL:
         period_text = PERIOD_INSTRUMENTAL[stats.most_active_period]
-        phrases.append(f"пик активности был {period_text}")
+        phrases.append(f"РїРёРє Р°РєС‚РёРІРЅРѕСЃС‚Рё Р±С‹Р» {period_text}")
 
     if not phrases:
-        return ["обсуждение было без выраженного доминирования тем"]
+        return ["РѕР±СЃСѓР¶РґРµРЅРёРµ Р±С‹Р»Рѕ Р±РµР· РІС‹СЂР°Р¶РµРЅРЅРѕРіРѕ РґРѕРјРёРЅРёСЂРѕРІР°РЅРёСЏ С‚РµРј"]
 
     return phrases[:phrases_limit]
 
@@ -167,26 +170,26 @@ def format_daily_report(
     topics: Sequence[str],
     character_phrases: Sequence[str] | None = None,
     user_names: Mapping[int, str] | None = None,
-    title_prefix: str = "📊 Итоги за",
+    title_prefix: str = "рџ“Љ РС‚РѕРіРё Р·Р°",
 ) -> str:
     """Format daily report in Telegram-friendly text."""
     lines: list[str] = [f"{title_prefix} {_format_report_date(report_date)}", ""]
-    lines.append(f"Всего сообщений: {stats.total_messages}")
+    lines.append(f"Р’СЃРµРіРѕ СЃРѕРѕР±С‰РµРЅРёР№: {stats.total_messages}")
     lines.append("")
 
-    lines.append("👤 Активность:")
+    lines.append("рџ‘¤ РђРєС‚РёРІРЅРѕСЃС‚СЊ:")
     lines.extend(_format_activity_block(stats.messages_by_user, user_names))
     lines.append("")
 
-    lines.append("📝 По объёму:")
+    lines.append("рџ“ќ РџРѕ РѕР±СЉС‘РјСѓ:")
     lines.extend(_format_volume_block(stats.chars_by_user, user_names))
     lines.append("")
 
-    lines.append("🔥 Основные темы:")
+    lines.append("рџ”Ґ РћСЃРЅРѕРІРЅС‹Рµ С‚РµРјС‹:")
     lines.extend(_format_topics_block(topics))
     lines.append("")
 
-    lines.append("💬 Характер обсуждения:")
+    lines.append("рџ’¬ РҐР°СЂР°РєС‚РµСЂ РѕР±СЃСѓР¶РґРµРЅРёСЏ:")
     if character_phrases is None:
         character_phrases = build_discussion_character(stats=stats, topics=topics, user_names=user_names)
     lines.extend(_format_character_block(character_phrases))
@@ -199,13 +202,13 @@ def _format_activity_block(
     user_names: Mapping[int, str] | None,
 ) -> list[str]:
     if not messages_by_user:
-        return ["1. Нет данных — 0"]
+        return ["1. РќРµС‚ РґР°РЅРЅС‹С… вЂ” 0"]
 
     ordered = sorted(messages_by_user.items(), key=lambda item: item[1], reverse=True)
     result: list[str] = []
     for idx, (user_id, count) in enumerate(ordered[:3], start=1):
         name = _resolve_user_name(user_id, user_names)
-        result.append(f"{idx}. {name} — {count}")
+        result.append(f"{idx}. {name} вЂ” {count}")
     return result
 
 
@@ -214,39 +217,39 @@ def _format_volume_block(
     user_names: Mapping[int, str] | None,
 ) -> list[str]:
     if not chars_by_user:
-        return ["— Нет данных: 0 символов"]
+        return ["вЂ” РќРµС‚ РґР°РЅРЅС‹С…: 0 СЃРёРјРІРѕР»РѕРІ"]
 
     ordered = sorted(chars_by_user.items(), key=lambda item: item[1], reverse=True)
     result: list[str] = []
     for user_id, chars in ordered[:3]:
         name = _resolve_user_name(user_id, user_names)
-        result.append(f"— {name}: {chars} символов")
+        result.append(f"вЂ” {name}: {chars} СЃРёРјРІРѕР»РѕРІ")
     return result
 
 
 def _format_topics_block(topics: Sequence[str]) -> list[str]:
     cleaned_topics = [topic.strip() for topic in topics if topic and topic.strip()]
     if not cleaned_topics:
-        return ["— Нет выраженных тем"]
+        return ["вЂ” РќРµС‚ РІС‹СЂР°Р¶РµРЅРЅС‹С… С‚РµРј"]
 
     result: list[str] = []
     for topic in cleaned_topics[:4]:
-        result.append(f"— {topic}")
+        result.append(f"вЂ” {topic}")
     return result
 
 
 def _format_character_block(character_phrases: Sequence[str]) -> list[str]:
     cleaned = [phrase.strip() for phrase in character_phrases if phrase and phrase.strip()]
     if not cleaned:
-        return ["— обсуждение было без выраженного доминирования тем"]
-    return [f"— {phrase}" for phrase in cleaned[:2]]
+        return ["вЂ” РѕР±СЃСѓР¶РґРµРЅРёРµ Р±С‹Р»Рѕ Р±РµР· РІС‹СЂР°Р¶РµРЅРЅРѕРіРѕ РґРѕРјРёРЅРёСЂРѕРІР°РЅРёСЏ С‚РµРј"]
+    return [f"вЂ” {phrase}" for phrase in cleaned[:3]]
 
 
 def _topics_indicate_short_discussion(topics: Sequence[str]) -> bool:
     if not topics:
         return True
     joined = " ".join(topic.lower() for topic in topics)
-    return "коротк" in joined and "тем" in joined
+    return "РєРѕСЂРѕС‚Рє" in joined and "С‚РµРј" in joined
 
 
 def _pick_main_topic(topics: Sequence[str]) -> str | None:
@@ -254,11 +257,25 @@ def _pick_main_topic(topics: Sequence[str]) -> str | None:
         cleaned = topic.strip().strip(".")
         if not cleaned:
             continue
-        if "коротк" in cleaned.lower():
+        if "РєРѕСЂРѕС‚Рє" in cleaned.lower():
             continue
         return _to_lower_sentence_start(cleaned)
     return None
 
+
+def _pick_secondary_topic(topics: Sequence[str], main_topic: str) -> str | None:
+    normalized_main = main_topic.strip().lower()
+    for topic in topics:
+        cleaned = topic.strip().strip(".")
+        if not cleaned:
+            continue
+        if "РєРѕСЂРѕС‚Рє" in cleaned.lower():
+            continue
+        lowered = _to_lower_sentence_start(cleaned)
+        if lowered.lower() == normalized_main:
+            continue
+        return lowered
+    return None
 
 def _pick_dominant_user(messages_by_user: Mapping[int, int]) -> int | None:
     if not messages_by_user:
@@ -331,3 +348,6 @@ def _parse_created_at(value: Any) -> datetime:
             continue
 
     raise ValueError(f"Unsupported datetime format: {value!r}")
+
+
+
