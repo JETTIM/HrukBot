@@ -89,7 +89,7 @@ def _get_chat_messages_by_day(day_value: date, chat_id: int) -> list[dict]:
 
 def _format_hour_window(hour: int) -> str:
     next_hour = (hour + 1) % 24
-    return f"{hour:02d}:00–{next_hour:02d}:00"
+    return f"{hour:02d}:00-{next_hour:02d}:00"
 
 
 def _estimate_minutes(messages_count: int) -> int:
