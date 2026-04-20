@@ -137,7 +137,15 @@ LLM_TIMEOUT=10
 - `image_events` тоже не чистятся текущей недельной очисткой;
 - daily/weekly аналитика может брать данные через `get_image_events_by_day(...)` и `get_top_image_clusters_by_day(...)`.
 
-OCR опционален. Если он не установлен, бот всё равно сохраняет hash и cluster.
+OCR использует Python-пакет `pytesseract` и системный бинарник `tesseract`.
+Python-пакет ставится через `requirements.txt`, а системный OCR на Ubuntu нужно поставить отдельно:
+
+```bash
+sudo apt update
+sudo apt install -y tesseract-ocr tesseract-ocr-rus
+```
+
+Если системный `tesseract` не установлен, бот всё равно сохраняет hash и cluster, но текст на картинке читать не будет.
 OCR-текст и short label хранятся как внутренние признаки. Они не выводятся пользователю как отдельные "фрагменты" в обычных отчетах.
 Если `USE_LLM_TOPICS=true`, при повторных встречах похожей картинки бот собирает caption/OCR/контекст и обновляет `cluster_summary`.
 Так постепенно появляется человекопонятная метка вроде "мем про сервер" или "реакция со свиньей".

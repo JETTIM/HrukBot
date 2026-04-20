@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import asyncio
 import logging
@@ -59,37 +59,38 @@ def build_topics_and_summary_lines(
     stats: Any,
     user_names: dict[int, str],
     settings: Any,
-) -> tuple[list[str], list[str]]:
+    return_meta: bool = False,
+) -> tuple[list[str], list[str]] | tuple[list[str], list[str], bool]:
+    used_llm = False
     if stats.total_messages == 0:
-        return (
-            ["Обсуждение пока короткое, выраженные темы не выделяются."],
-            ["на текущий момент сообщений почти нет"],
-        )
+        topics = ["Обсуждение пока короткое, выраженные темы не выделяются."]
+        summary_lines = ["на текущий момент сообщений почти нет"]
+        return (topics, summary_lines, used_llm) if return_meta else (topics, summary_lines)
 
     topic_source = build_topics_source(messages)
     if not settings.use_llm_topics:
         logger.info("LLM topics disabled; using rule-based topics")
         topics = extract_main_topics(topic_source, top_k=4)
         summary_lines = build_discussion_character(stats=stats, topics=topics, user_names=user_names)
-        return topics, summary_lines
+        return (topics, summary_lines, used_llm) if return_meta else (topics, summary_lines)
 
-    if settings.use_llm_topics:
-        llm_result = try_extract_topics_and_summary(
-            topic_source,
-            backend=settings.llm_backend,
-            model=settings.llm_model,
-            endpoint=settings.llm_endpoint,
-            timeout=settings.llm_timeout,
-        )
-        if llm_result is not None:
-            logger.info("LLM topics used")
-            return llm_result
+    llm_result = try_extract_topics_and_summary(
+        topic_source,
+        backend=settings.llm_backend,
+        model=settings.llm_model,
+        endpoint=settings.llm_endpoint,
+        timeout=settings.llm_timeout,
+    )
+    if llm_result is not None:
+        logger.info("LLM topics used")
+        used_llm = True
+        topics, summary_lines = llm_result
+        return (topics, summary_lines, used_llm) if return_meta else (topics, summary_lines)
 
     logger.warning("LLM topics fallback used")
     topics = extract_main_topics(topic_source, top_k=4)
     summary_lines = build_discussion_character(stats=stats, topics=topics, user_names=user_names)
-    return topics, summary_lines
-
+    return (topics, summary_lines, used_llm) if return_meta else (topics, summary_lines)
 
 def split_for_telegram(text: str, limit: int = MAX_TELEGRAM_MESSAGE_LENGTH) -> list[str]:
     if len(text) <= limit:

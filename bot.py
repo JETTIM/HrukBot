@@ -22,10 +22,21 @@ from app.db import (
     init_db,
     save_message,
 )
-from app.images import get_image_file_id, process_message_image
+try:
+    from app.images import get_image_file_id, process_message_image
+    IMAGE_PIPELINE_AVAILABLE = True
+except Exception:  # noqa: BLE001 - optional image deps may be absent on VPS
+    IMAGE_PIPELINE_AVAILABLE = False
+
+    def get_image_file_id(message: Message) -> str | None:  # type: ignore[override]
+        return None
+
+    async def process_message_image(bot: Bot, message: Message, settings: object) -> None:  # type: ignore[override]
+        return
 from app.llm_topics import (
     try_answer_question,
     try_generate_mood_summary,
+    try_generate_roast,
     try_generate_svin_comment,
     try_generate_svin_joke,
 )
@@ -36,9 +47,13 @@ logger = logging.getLogger(__name__)
 _last_cleanup_ts: float = 0.0
 _messages_since_svin_reply = 10
 _image_processing_semaphore: asyncio.Semaphore | None = None
+_svin_reply_chance = 0.03
 PENDING_TEXT = "⏳ ща напишу..."
 PENDING_MIN_SECONDS = 1.0
-SHORT_MEMORY_MESSAGES = 4
+SHORT_MEMORY_MESSAGES = 10
+VISUAL_CONTEXT_WAIT_SECONDS = 3.0
+VISUAL_CONTEXT_POLL_SECONDS = 0.5
+ENABLE_VISUAL_FEATURES = False
 
 
 def _detect_message_type(message: Message) -> str:
@@ -95,7 +110,11 @@ def _build_topics_source(messages: list[dict]) -> list[str]:
 
 
 def _should_try_svin_reply(today_messages_count: int) -> bool:
-    return today_messages_count >= 10 and _messages_since_svin_reply >= 10 and random.random() < 0.03
+    return (
+        today_messages_count >= 10
+        and _messages_since_svin_reply >= 10
+        and random.random() < _svin_reply_chance
+    )
 
 
 def _extract_command_args(message: Message) -> str:
@@ -112,6 +131,8 @@ def _extract_command_args(message: Message) -> str:
 
 
 def _reply_has_visual_file(message: Message) -> bool:
+    if not ENABLE_VISUAL_FEATURES:
+        return False
     return bool(message.reply_to_message and get_image_file_id(message.reply_to_message))
 
 
@@ -151,6 +172,8 @@ def _strip_bot_mention(text: str, bot_username: str | None) -> str:
 
 
 def _build_reply_visual_context(message: Message) -> str | None:
+    if not ENABLE_VISUAL_FEATURES:
+        return None
     reply = message.reply_to_message
     if not reply:
         return None
@@ -187,7 +210,25 @@ def _build_reply_visual_context(message: Message) -> str | None:
     return "\n".join(parts) if parts else "Картинка знакома, но осмысленного описания пока нет."
 
 
+async def _wait_for_reply_visual_context(message: Message) -> str | None:
+    if not ENABLE_VISUAL_FEATURES:
+        return None
+    if not _reply_has_visual_file(message):
+        return _build_reply_visual_context(message)
+
+    deadline = time.monotonic() + VISUAL_CONTEXT_WAIT_SECONDS
+    while True:
+        visual_context = _build_reply_visual_context(message)
+        if visual_context is not None:
+            return visual_context
+        if time.monotonic() >= deadline:
+            return None
+        await asyncio.sleep(VISUAL_CONTEXT_POLL_SECONDS)
+
+
 def _format_reply_visual_status(message: Message) -> str:
+    if not ENABLE_VISUAL_FEATURES:
+        return "Визуальная обработка временно отключена."
     reply = message.reply_to_message
     if not reply:
         return "Ответь командой /seen на картинку, GIF или image-файл."
@@ -299,6 +340,35 @@ def _build_question_with_context(
     return "\n\n".join(parts)
 
 
+def _normalize_llm_text_block(text: str, max_lines: int = 3) -> str:
+    lines: list[str] = []
+    for raw in text.replace("\r", "\n").split("\n"):
+        line = raw.strip()
+        if not line:
+            continue
+        line = line.replace("**", "").replace("__", "").replace("`", "")
+        for prefix in ("- ", "— ", "• ", "* ", ". "):
+            if line.startswith(prefix):
+                line = line[len(prefix):].strip()
+        if line and line[0].isdigit() and len(line) > 2 and line[1] in {".", ")"}:
+            line = line[2:].strip()
+        if line:
+            lines.append(line)
+        if len(lines) >= max_lines:
+            break
+    return "\n".join(lines) if lines else text.strip()
+
+
+async def _safe_delete_command_message(bot: Bot, message: Message) -> None:
+    text = (message.text or "").strip()
+    if not text.startswith("/"):
+        return
+    try:
+        await bot.delete_message(chat_id=message.chat.id, message_id=message.message_id)
+    except Exception:
+        return
+
+
 async def _process_message_image_limited(bot: Bot, message: Message, settings: object) -> None:
     if _image_processing_semaphore is None:
         await process_message_image(bot, message, settings=settings)
@@ -323,6 +393,8 @@ async def _finish_pending(pending_message: Message, started_at: float, text: str
 
 
 def _format_visual_memory(limit: int = 8) -> str:
+    if not ENABLE_VISUAL_FEATURES:
+        return "Визуальная память временно отключена."
     clusters = get_top_image_clusters(limit=limit)
     if not clusters:
         return "Визуальная память пока пустая."
@@ -355,11 +427,13 @@ async def main() -> None:
     )
     bot_info = await bot.get_me()
     logger.info(
-        "Bot runtime config: username=@%s id=%s use_llm_topics=%s enable_image_processing=%s",
+        "Bot runtime config: username=@%s id=%s use_llm_topics=%s enable_image_processing=%s visual_features=%s image_pipeline_available=%s",
         bot_info.username,
         bot_info.id,
         settings.use_llm_topics,
         settings.enable_image_processing,
+        ENABLE_VISUAL_FEATURES,
+        IMAGE_PIPELINE_AVAILABLE,
     )
     dp = Dispatcher()
     router = Router()
@@ -368,6 +442,7 @@ async def main() -> None:
     async def on_stats(message: Message) -> None:
         if message.chat.id != settings.allowed_chat_id:
             return
+        await _safe_delete_command_message(bot, message)
 
         pending_message, pending_started = await _send_pending(message)
         today = date.today()
@@ -375,11 +450,12 @@ async def main() -> None:
         user_names = build_user_names(messages)
 
         stats = calculate_daily_stats(messages)
-        topics, character = build_topics_and_summary_lines(
+        topics, character, used_llm_topics = build_topics_and_summary_lines(
             messages=messages,
             stats=stats,
             user_names=user_names,
             settings=settings,
+            return_meta=True,
         )
 
         report_text = format_daily_report(
@@ -390,12 +466,15 @@ async def main() -> None:
             user_names=user_names,
             title_prefix="📊 На данный момент за",
         )
+        if settings.use_llm_topics and stats.total_messages > 0 and not used_llm_topics:
+            report_text = f"{report_text}\n\nпу-пу-пу технические шоколадки"
         await _finish_pending(pending_message, pending_started, report_text)
 
     @router.message(Command("dead"))
     async def on_dead(message: Message) -> None:
         if message.chat.id != settings.allowed_chat_id:
             return
+        await _safe_delete_command_message(bot, message)
 
         pending_message, pending_started = await _send_pending(message)
         today = date.today()
@@ -421,6 +500,7 @@ async def main() -> None:
     async def on_time(message: Message) -> None:
         if message.chat.id != settings.allowed_chat_id:
             return
+        await _safe_delete_command_message(bot, message)
 
         pending_message, pending_started = await _send_pending(message)
         messages_count = len(_get_chat_messages_by_day(date.today(), settings.allowed_chat_id))
@@ -435,6 +515,7 @@ async def main() -> None:
     async def on_when(message: Message) -> None:
         if message.chat.id != settings.allowed_chat_id:
             return
+        await _safe_delete_command_message(bot, message)
 
         pending_message, pending_started = await _send_pending(message)
         messages = _get_chat_messages_by_day(date.today(), settings.allowed_chat_id)
@@ -454,6 +535,7 @@ async def main() -> None:
     async def on_mood(message: Message) -> None:
         if message.chat.id != settings.allowed_chat_id:
             return
+        await _safe_delete_command_message(bot, message)
 
         pending_message, pending_started = await _send_pending(message)
         messages = _get_chat_messages_by_day(date.today(), settings.allowed_chat_id)
@@ -468,12 +550,13 @@ async def main() -> None:
             )
         if mood is None:
             mood = _fallback_mood(len(messages))
-        await _finish_pending(pending_message, pending_started, escape(mood))
+        await _finish_pending(pending_message, pending_started, escape(_normalize_llm_text_block(mood, max_lines=3)))
 
     @router.message(Command("svin"))
     async def on_svin(message: Message) -> None:
         if message.chat.id != settings.allowed_chat_id:
             return
+        await _safe_delete_command_message(bot, message)
 
         pending_message, pending_started = await _send_pending(message)
         joke = None
@@ -493,6 +576,7 @@ async def main() -> None:
     async def on_ask(message: Message) -> None:
         if message.chat.id != settings.allowed_chat_id:
             return
+        await _safe_delete_command_message(bot, message)
 
         question = _extract_question_or_visual_default(message)
         if not question:
@@ -502,7 +586,7 @@ async def main() -> None:
             await message.answer("LLM сейчас выключена.")
             return
 
-        visual_context = _build_reply_visual_context(message)
+        visual_context = await _wait_for_reply_visual_context(message)
         if _reply_has_visual_file(message) and visual_context is None:
             await message.answer("Визуальный контекст этой картинки ещё не готов.")
             return
@@ -525,6 +609,7 @@ async def main() -> None:
     async def on_visual(message: Message) -> None:
         if message.chat.id != settings.allowed_chat_id:
             return
+        await _safe_delete_command_message(bot, message)
 
         pending_message, pending_started = await _send_pending(message)
         await _finish_pending(pending_message, pending_started, escape(_format_visual_memory()))
@@ -533,9 +618,69 @@ async def main() -> None:
     async def on_seen(message: Message) -> None:
         if message.chat.id != settings.allowed_chat_id:
             return
+        await _safe_delete_command_message(bot, message)
 
         pending_message, pending_started = await _send_pending(message)
         await _finish_pending(pending_message, pending_started, escape(_format_reply_visual_status(message)))
+
+    @router.message(Command("chance"))
+    async def on_chance(message: Message) -> None:
+        if message.chat.id != settings.allowed_chat_id:
+            return
+        await _safe_delete_command_message(bot, message)
+
+        global _svin_reply_chance
+        args = _extract_command_args(message).strip().lower().replace(",", ".")
+        step = 0.01
+
+        if not args:
+            await message.answer(f"Текущий шанс случайного комментария: {_svin_reply_chance * 100:.1f}%")
+            return
+
+        if args in {"+", "up", "more", "plus"}:
+            _svin_reply_chance = min(1.0, _svin_reply_chance + step)
+        elif args in {"-", "down", "less", "minus"}:
+            _svin_reply_chance = max(0.0, _svin_reply_chance - step)
+        else:
+            try:
+                raw = float(args)
+                _svin_reply_chance = raw / 100.0 if raw > 1 else raw
+                _svin_reply_chance = max(0.0, min(1.0, _svin_reply_chance))
+            except ValueError:
+                await message.answer("Используй: /chance, /chance +, /chance -, /chance 7")
+                return
+
+        await message.answer(
+            f"Шанс случайного комментария: {_svin_reply_chance * 100:.1f}%\n"
+            "Значение действует до перезапуска бота."
+        )
+
+    @router.message(Command("roast"))
+    async def on_roast(message: Message) -> None:
+        if message.chat.id != settings.allowed_chat_id:
+            return
+        await _safe_delete_command_message(bot, message)
+
+        target = _extract_command_args(message).strip()
+        if not target:
+            await message.answer("Используй: /roast @username")
+            return
+        if not settings.use_llm_topics:
+            await message.answer("LLM сейчас выключена.")
+            return
+
+        pending_message, pending_started = await _send_pending(message)
+        roast = try_generate_roast(
+            target=target,
+            backend=settings.llm_backend,
+            model=settings.llm_model,
+            endpoint=settings.llm_endpoint,
+            timeout=settings.llm_timeout,
+        )
+        if roast is None:
+            await _finish_pending(pending_message, pending_started, "Не смогла сделать прожарку, попробуй ещё раз.")
+            return
+        await _finish_pending(pending_message, pending_started, escape(_normalize_llm_text_block(roast, max_lines=2)))
 
     @router.message()
     async def on_message(message: Message) -> None:
@@ -551,6 +696,8 @@ async def main() -> None:
             "/ask",
             "/visual",
             "/seen",
+            "/chance",
+            "/roast",
         )):
             return
         if message.from_user and message.from_user.id == bot_info.id:
@@ -583,7 +730,7 @@ async def main() -> None:
             message_type,
         )
 
-        if settings.enable_image_processing and get_image_file_id(message) is not None:
+        if ENABLE_VISUAL_FEATURES and IMAGE_PIPELINE_AVAILABLE and settings.enable_image_processing and get_image_file_id(message) is not None:
             asyncio.create_task(_process_message_image_limited(bot, message, settings=settings))
 
         global _last_cleanup_ts, _messages_since_svin_reply
@@ -612,7 +759,7 @@ async def main() -> None:
 
             question = _strip_bot_mention(text_content, bot_info.username)
             if question:
-                visual_context = _build_reply_visual_context(message)
+                visual_context = await _wait_for_reply_visual_context(message)
                 reply_text_context = _build_reply_text_context(message, bot_info.username, bot_info.id)
                 short_memory = _build_short_chat_memory(message.chat.id, message.message_id)
                 if _reply_has_visual_file(message) and visual_context is None:

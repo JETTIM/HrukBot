@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import json
 import logging
@@ -17,16 +17,15 @@ SYSTEM_PROMPT = (
     "Отвечай только на русском языке.\n"
     "Верни только JSON без markdown, без пояснений и без лишнего текста.\n"
     "Формат ответа строго такой:\n"
-    '{\n'
-    '  "topics": ["..."],\n'
-    '  "summary_lines": ["..."]\n'
-    '}\n'
-    'Требования:\n'
-    '- "topics": 2-5 короткие темы обсуждения;\n'
-    '- "summary_lines": несколько предложений о характере обсуждения;\n'
-    '- не придумывай темы, которых нет в сообщениях;\n'
-    '- не пересказывай диалог подробно;\n'
-    '- формулируй темы коротко и естественно.'
+    "{\n"
+    "  \"topics\": [\"...\"],\n"
+    "  \"summary_lines\": [\"...\"]\n"
+    "}\n"
+    "Требования:\n"
+    "- topics: 2-5 коротких темы обсуждения;\n"
+    "- summary_lines: 1-2 короткие фразы о характере обсуждения;\n"
+    "- не придумывай темы, которых нет в сообщениях;\n"
+    "- формулируй коротко и естественно."
 )
 
 
@@ -54,9 +53,8 @@ def try_extract_topics_and_summary(
                 "role": "user",
                 "content": (
                     "Ниже сообщения Telegram-чата за день.\n"
-                    "Нужно выделить 2-5 основные темы обсуждения и нескольк предложений "
-                    "для блока 'Характер обсуждения'.\n"
-                    "Ответ верни строго в JSON с полями topics и summary_lines.\n\n"
+                    "Нужно выделить 2-5 основных тем и 1-2 фразы для блока 'Характер обсуждения'.\n"
+                    "Ответ верни строго JSON с полями topics и summary_lines.\n\n"
                     "Сообщения:\n"
                     f"{prompt_input}"
                 ),
@@ -123,15 +121,14 @@ def try_generate_svin_joke(
                 "content": (
                     "Ты пишешь короткие русские анекдоты с понятной структурой: завязка и панчлайн. "
                     "Юмор должен быть бытовым, естественным и связным. "
-                    "Без абсурда, случайных предметов, политики, грязной брани и оскорблений реальных людей."
+                    "Без политики, грязной брани и оскорблений реальных людей."
                 ),
             },
             {
                 "role": "user",
                 "content": (
-                    "Сочини один короткий нормальный анекдот про свинью на русском языке. "
-                    "2-4 предложения. Обязательно должен быть понятный смешной финал. "
-                    "Не используй слова: картофель, мясо, рынок. "
+                    "Сочини один короткий анекдот про свинью на русском языке. "
+                    "2-4 предложения. Должен быть понятный смешной финал. "
                     "Ответь только текстом анекдота."
                 ),
             },
@@ -149,7 +146,7 @@ def try_generate_svin_joke(
         logger.exception("LLM svin joke request failed")
         return None
 
-    return _clean_plain_text(joke, max_chars=900, check_joke=True)
+    return _clean_plain_text(joke, max_chars=900)
 
 
 def try_generate_mood_summary(
@@ -170,8 +167,8 @@ def try_generate_mood_summary(
         endpoint=endpoint,
         timeout=timeout,
         system_prompt=(
-            "Ты коротко оцениваешь настроение и активность маленького Telegram-чата. "
-            "Пиши естественно, на русском, без списков и без markdown."
+            "Ты кратко оцениваешь настроение и активность маленького Telegram-чата. "
+            "Пиши естественно на русском, без markdown."
         ),
         user_prompt=(
             "Проанализируй сообщения чата за день.\n"
@@ -204,25 +201,58 @@ def try_generate_svin_comment(
         endpoint=endpoint,
         timeout=timeout,
         system_prompt=(
-            "Ты отвечаешь как ироничный Telegram-бот. "
-            "Пиши по-русски, одной короткой фразой, без злобы и без объяснений."
+            "Ты отвечаешь как дерзкий Telegram-бот. "
+            "Стиль: колко, язвительно, с прожаркой. "
+            "Без угроз, без призывов к насилию, без hate speech. "
+            "Одна короткая фраза на русском, без объяснений."
         ),
         user_prompt=(
             "Это сообщение из Telegram-чата.\n\n"
             f"{message_text.strip()[:500]}\n\n"
-            "Ответь ОДНОЙ короткой ироничной фразой.\n"
+            "Ответь ОДНОЙ короткой агрессивно-ироничной фразой.\n"
             "Без пояснений.\n"
             "Без цитирования.\n"
             "На русском языке.\n"
             "Максимум 8 слов."
         ),
-        temperature=0.7,
-        max_tokens=50,
+        temperature=0.85,
+        max_tokens=60,
         max_chars=120,
     )
     if comment is None:
         return None
     return " ".join(comment.split()[:8])
+
+
+def try_generate_roast(
+    target: str,
+    *,
+    backend: str,
+    model: str,
+    endpoint: str,
+    timeout: float,
+) -> str | None:
+    target = target.strip()
+    if not target:
+        return None
+
+    return _try_generate_plain_text(
+        backend=backend,
+        model=model,
+        endpoint=endpoint,
+        timeout=timeout,
+        system_prompt=(
+            "Ты пишешь короткую прожарку в чате. "
+            "Стиль: едко, остро, дерзко, но без угроз, без призывов к насилию и без hate speech."
+        ),
+        user_prompt=(
+            f"Сделай короткую прожарку пользователя {target}.\n"
+            "1-2 строки на русском, без markdown."
+        ),
+        temperature=0.9,
+        max_tokens=90,
+        max_chars=220,
+    )
 
 
 def try_answer_question(
@@ -244,7 +274,9 @@ def try_answer_question(
         timeout=timeout,
         system_prompt=(
             "Ты отвечаешь на вопросы в маленьком Telegram-чате. "
-            "Пиши на русском, кратко, понятно и без markdown."
+            "Пиши на русском, кратко и понятно. "
+            "Допускается легкая ирония, но без угроз и без hate speech. "
+            "Без markdown."
         ),
         user_prompt=question[:1500],
         temperature=0.5,
@@ -271,9 +303,9 @@ def try_generate_image_cluster_summary(
         endpoint=endpoint,
         timeout=timeout,
         system_prompt=(
-            "Ты даешь короткие человекопонятные ярлыки визуальным шаблонам в Telegram-чате. "
-            "Используй только предоставленный контекст: подписи, OCR и соседний текст. "
-            "Не выдумывай детали картинки. Ответь одной короткой фразой на русском."
+            "Ты даешь короткий человекопонятный label визуальному шаблону в Telegram-чате. "
+            "Используй только подписи, OCR и соседний текст. "
+            "Не выдумывай детали изображения."
         ),
         user_prompt=(
             "Нужно дать короткий label для повторяющегося визуального кластера.\n"
@@ -325,22 +357,11 @@ def _try_generate_plain_text(
     return _clean_plain_text(text, max_chars=max_chars)
 
 
-def _clean_plain_text(text: str, *, max_chars: int, check_joke: bool = False) -> str | None:
+def _clean_plain_text(text: str, *, max_chars: int) -> str | None:
     cleaned = _strip_markdown_fence(text).strip().strip('"')
     if not cleaned:
         return None
-    if check_joke and _looks_like_bad_joke(cleaned):
-        logger.warning("LLM svin joke rejected by simple quality filter")
-        return None
     return cleaned[:max_chars]
-
-
-def _looks_like_bad_joke(text: str) -> bool:
-    lowered = text.lower()
-    banned_fragments = ("картоф", "мяс", "рынд", "рынок")
-    if any(fragment in lowered for fragment in banned_fragments):
-        return True
-    return len(text.split()) < 12
 
 
 def _read_http_error(exc: HTTPError) -> str:
