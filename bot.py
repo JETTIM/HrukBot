@@ -263,6 +263,7 @@ def _build_reply_visual_context(message: Message) -> str | None:
 async def _wait_for_reply_visual_context(message: Message) -> str | None:
     if not ENABLE_VISUAL_FEATURES:
         return None
+    await _ensure_reply_visual_processing(message)
     if not _reply_has_visual_file(message):
         return _build_reply_visual_context(message)
 
@@ -274,6 +275,29 @@ async def _wait_for_reply_visual_context(message: Message) -> str | None:
         if time.monotonic() >= deadline:
             return None
         await asyncio.sleep(VISUAL_CONTEXT_POLL_SECONDS)
+
+
+async def _ensure_reply_visual_processing(message: Message) -> bool:
+    if not ENABLE_VISUAL_FEATURES:
+        return False
+    reply = message.reply_to_message
+    if not reply:
+        return False
+    if get_image_file_id(reply) is None:
+        return False
+
+    existing_event = get_image_event_by_message(chat_id=reply.chat.id, message_id=reply.message_id)
+    if existing_event is not None:
+        return False
+
+    logger.info(
+        "Scheduling visual processing from reply command: chat_id=%s message_id=%s trigger_message_id=%s",
+        reply.chat.id,
+        reply.message_id,
+        message.message_id,
+    )
+    asyncio.create_task(_process_message_image_limited(message.bot, reply, settings=get_settings()))
+    return True
 
 
 def _format_reply_visual_status(message: Message) -> str:
@@ -939,8 +963,16 @@ async def main() -> None:
         _log_incoming_command(message)
         await _safe_delete_command_message(bot, message)
 
+        scheduled = await _ensure_reply_visual_processing(message)
         pending_message, pending_started = await _send_pending(message)
-        await _finish_pending(pending_message, pending_started, escape(_format_reply_visual_status(message)))
+        status_text = _format_reply_visual_status(message)
+        if scheduled:
+            status_text = (
+                "Запустила обработку reply-картинки.\n"
+                "Проверь /seen ещё раз через пару секунд.\n\n"
+                f"{status_text}"
+            )
+        await _finish_pending(pending_message, pending_started, escape(status_text))
 
     @router.message(Command("chance"))
     async def on_chance(message: Message) -> None:
