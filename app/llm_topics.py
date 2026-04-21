@@ -397,12 +397,31 @@ def _call_llama_cpp(*, endpoint: str, payload: dict[str, Any], timeout: float) -
 
 def _extract_message_text(message: dict[str, Any]) -> str | None:
     content = message.get("content")
-    if not isinstance(content, str):
-        return None
-    text = content.strip()
-    if not text:
-        return None
-    return text
+    if isinstance(content, str):
+        text = content.strip()
+        if text:
+            return text
+    elif isinstance(content, list):
+        parts: list[str] = []
+        for item in content:
+            if not isinstance(item, dict):
+                continue
+            text_value = item.get("text")
+            if not isinstance(text_value, str):
+                continue
+            normalized = text_value.strip()
+            if normalized:
+                parts.append(normalized)
+        if parts:
+            return "\n".join(parts)
+
+    text_field = message.get("text")
+    if isinstance(text_field, str):
+        normalized_text_field = text_field.strip()
+        if normalized_text_field:
+            return normalized_text_field
+
+    return None
 
 
 def _looks_like_reasoning_text(text: str) -> bool:

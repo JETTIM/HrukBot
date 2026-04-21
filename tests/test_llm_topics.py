@@ -23,6 +23,22 @@ def test_extract_message_text_keeps_non_empty_content_even_if_reasoning_like() -
     assert _extract_message_text(message) == "Thinking Process: сначала подумаю, потом отвечу"
 
 
+def test_extract_message_text_supports_structured_content_parts() -> None:
+    message = {
+        "content": [
+            {"type": "text", "text": "первая строка"},
+            {"type": "text", "text": "  вторая строка  "},
+            {"type": "input_text", "text": "   "},
+        ]
+    }
+    assert _extract_message_text(message) == "первая строка\nвторая строка"
+
+
+def test_extract_message_text_falls_back_to_message_text_field() -> None:
+    message = {"content": [], "text": "  текст из message.text  "}
+    assert _extract_message_text(message) == "текст из message.text"
+
+
 def test_clean_plain_text_extracts_best_draft_option() -> None:
     raw = (
         "Thinking Process:\n\n"
