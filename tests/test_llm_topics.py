@@ -39,6 +39,16 @@ def test_extract_message_text_supports_structured_content_parts() -> None:
     assert _extract_message_text(message) == "первая строка\nвторая строка"
 
 
+def test_extract_message_text_supports_content_dict() -> None:
+    message = {"content": {"type": "text", "text": "  ответ из dict  "}}
+    assert _extract_message_text(message) == "ответ из dict"
+
+
+def test_extract_message_text_supports_list_with_output_text() -> None:
+    message = {"content": [{"type": "output_text", "output_text": "  ответ из output_text  "}]}
+    assert _extract_message_text(message) == "ответ из output_text"
+
+
 def test_extract_message_text_falls_back_to_message_text_field() -> None:
     message = {"content": [], "text": "  текст из message.text  "}
     assert _extract_message_text(message) == "текст из message.text"

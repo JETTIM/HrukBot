@@ -478,15 +478,21 @@ def _extract_message_text(message: dict[str, Any]) -> str | None:
         text = content.strip()
         if text:
             return text
+    elif isinstance(content, dict):
+        dict_text = _extract_text_value(content)
+        if dict_text:
+            return dict_text
     elif isinstance(content, list):
         parts: list[str] = []
         for item in content:
+            if isinstance(item, str):
+                normalized_item = item.strip()
+                if normalized_item:
+                    parts.append(normalized_item)
+                continue
             if not isinstance(item, dict):
                 continue
-            text_value = item.get("text")
-            if not isinstance(text_value, str):
-                continue
-            normalized = text_value.strip()
+            normalized = _extract_text_value(item)
             if normalized:
                 parts.append(normalized)
         if parts:
@@ -498,6 +504,16 @@ def _extract_message_text(message: dict[str, Any]) -> str | None:
         if normalized_text_field:
             return normalized_text_field
 
+    return None
+
+
+def _extract_text_value(payload: dict[str, Any]) -> str | None:
+    for key in ("text", "content", "value", "output_text"):
+        value = payload.get(key)
+        if isinstance(value, str):
+            normalized = value.strip()
+            if normalized:
+                return normalized
     return None
 
 
