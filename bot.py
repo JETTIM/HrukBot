@@ -417,6 +417,46 @@ def _normalize_llm_text_block(text: str, max_lines: int = 3) -> str:
     return "\n".join(lines) if lines else text.strip()
 
 
+def _call_llm_with_chat_fallback(
+    generator: object,
+    *,
+    settings: object,
+    primary_kwargs: dict[str, object],
+) -> str | None:
+    result = generator(
+        **primary_kwargs,
+        backend=getattr(settings, "llm_backend", "llama_cpp"),
+        model=getattr(settings, "llm_model", ""),
+        endpoint=getattr(settings, "llm_endpoint", ""),
+        timeout=float(getattr(settings, "llm_timeout", 10.0)),
+    )
+    if result is not None:
+        return result
+
+    rewrite_model = str(getattr(settings, "llm_chat_model", "") or "").strip()
+    rewrite_endpoint = str(getattr(settings, "llm_chat_endpoint", "") or "").strip()
+    primary_model = str(getattr(settings, "llm_model", "") or "").strip()
+    primary_endpoint = str(getattr(settings, "llm_endpoint", "") or "").strip()
+    if not rewrite_model or not rewrite_endpoint:
+        return None
+    if rewrite_model == primary_model and rewrite_endpoint == primary_endpoint:
+        return None
+
+    logger.info(
+        "Primary LLM command failed; retrying with chat model generator=%s rewrite_model=%s rewrite_endpoint=%s",
+        getattr(generator, "__name__", type(generator).__name__),
+        rewrite_model,
+        rewrite_endpoint,
+    )
+    return generator(
+        **primary_kwargs,
+        backend=getattr(settings, "llm_backend", "llama_cpp"),
+        model=rewrite_model,
+        endpoint=rewrite_endpoint,
+        timeout=float(getattr(settings, "llm_timeout", 10.0)),
+    )
+
+
 def _maybe_rewrite_chat_answer(answer: str, settings: object) -> str:
     primary_endpoint = str(getattr(settings, "llm_endpoint", "") or "").strip()
     primary_model = str(getattr(settings, "llm_model", "") or "").strip()
@@ -763,12 +803,12 @@ async def main() -> None:
         messages = _get_chat_messages_by_day(date.today(), settings.allowed_chat_id)
         mood = None
         if settings.use_llm_topics:
-            mood = try_generate_mood_summary(
-                _build_topics_source(messages),
-                backend=settings.llm_backend,
-                model=settings.llm_model,
-                endpoint=settings.llm_endpoint,
-                timeout=settings.llm_timeout,
+            mood = _call_llm_with_chat_fallback(
+                try_generate_mood_summary,
+                settings=settings,
+                primary_kwargs={
+                    "messages": _build_topics_source(messages),
+                },
             )
         if mood is None:
             mood = _fallback_mood(len(messages))
@@ -784,11 +824,10 @@ async def main() -> None:
         pending_message, pending_started = await _send_pending(message)
         joke = None
         if settings.use_llm_topics:
-            joke = try_generate_svin_joke(
-                backend=settings.llm_backend,
-                model=settings.llm_model,
-                endpoint=settings.llm_endpoint,
-                timeout=settings.llm_timeout,
+            joke = _call_llm_with_chat_fallback(
+                try_generate_svin_joke,
+                settings=settings,
+                primary_kwargs={},
             )
         if joke is not None:
             await _finish_pending(pending_message, pending_started, escape(joke))
@@ -943,12 +982,12 @@ async def main() -> None:
             return
 
         pending_message, pending_started = await _send_pending(message)
-        roast = try_generate_roast(
-            target=target,
-            backend=settings.llm_backend,
-            model=settings.llm_model,
-            endpoint=settings.llm_endpoint,
-            timeout=settings.llm_timeout,
+        roast = _call_llm_with_chat_fallback(
+            try_generate_roast,
+            settings=settings,
+            primary_kwargs={
+                "target": target,
+            },
         )
         if roast is None:
             await _finish_pending(pending_message, pending_started, "Не смогла сделать прожарку, попробуй ещё раз.")

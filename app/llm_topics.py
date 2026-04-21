@@ -16,6 +16,9 @@ MIN_INPUT_CHARS = 700
 MIN_MAX_TOKENS = 48
 TOPICS_INPUT_CHARS = 1200
 TOPICS_MESSAGE_CHARS = 90
+MOOD_INPUT_CHARS = 900
+MOOD_MESSAGE_CHARS = 80
+LLM_LOG_PREVIEW_CHARS = 280
 
 SYSTEM_PROMPT = (
     "Ты анализируешь переписку Telegram-чата.\n"
@@ -175,9 +178,19 @@ def try_generate_mood_summary(
     endpoint: str,
     timeout: float,
 ) -> str | None:
-    prompt_input = _build_corpus(messages)
+    prompt_input = _build_mood_corpus(messages)
     if not prompt_input:
         return None
+
+    logger.info(
+        "LLM mood request: source_items=%s source_chars=%s prompt_chars=%s max_tokens=%s model=%s endpoint=%s",
+        len(messages),
+        sum(len(str(item)) for item in messages),
+        len(prompt_input),
+        120,
+        model,
+        endpoint,
+    )
 
     return _try_generate_plain_text(
         backend=backend,
@@ -185,19 +198,18 @@ def try_generate_mood_summary(
         endpoint=endpoint,
         timeout=timeout,
         system_prompt=(
-            "Ты кратко оцениваешь настроение и активность маленького Telegram-чата. "
-            "Пиши естественно на русском, без markdown."
+            "Оцени настроение и активность Telegram-чата. "
+            "Ответь по-русски очень кратко, 2-3 короткими строками, без markdown и без рассуждений."
         ),
         user_prompt=(
-            "Проанализируй сообщения чата за день.\n"
-            "Коротко оцени:\n"
+            "На основе краткой выжимки оцени:\n"
             "- уровень активности\n"
-            "- характер общения (обсуждение, троллинг, болтовня и т.д.)\n"
-            "Ответ 2-3 строками на русском.\n\n"
-            f"Сообщения:\n{prompt_input}"
+            "- характер общения\n"
+            "Верни только 2-3 короткие строки.\n\n"
+            f"{prompt_input}"
         ),
         temperature=0.45,
-        max_tokens=180,
+        max_tokens=120,
         max_chars=900,
     )
 
@@ -455,6 +467,33 @@ def _build_topics_corpus(messages: Sequence[str]) -> str:
     return "\n".join(chunks)
 
 
+def _build_mood_corpus(messages: Sequence[str]) -> str:
+    cleaned_messages = [
+        " ".join(raw.split()).strip()
+        for raw in messages[-MAX_MESSAGES:]
+        if raw and raw.strip()
+    ]
+    if not cleaned_messages:
+        return ""
+
+    digest: list[str] = [f"Всего осмысленных реплик: {len(cleaned_messages)}"]
+    sample_size = min(10, len(cleaned_messages))
+    step = max(1, len(cleaned_messages) // sample_size)
+    total_chars = len(digest[0])
+
+    for raw in cleaned_messages[::step][:sample_size]:
+        if len(raw) < 6:
+            continue
+        line = f"- {raw[:MOOD_MESSAGE_CHARS]}"
+        add_len = len(line) + 1
+        if total_chars + add_len > MOOD_INPUT_CHARS:
+            break
+        digest.append(line)
+        total_chars += add_len
+
+    return "\n".join(digest)
+
+
 def _call_llama_cpp_with_retries(*, endpoint: str, payload: dict[str, Any], timeout: float) -> str:
     current_payload = json.loads(json.dumps(payload))
     last_error: Exception | None = None
@@ -504,6 +543,7 @@ def _call_llama_cpp(*, endpoint: str, payload: dict[str, Any], timeout: float) -
         raise ValueError("No choices in LLM response")
 
     choice = choices[0]
+    _log_llm_response_preview(choice, endpoint=endpoint, model=str(payload.get("model") or ""))
     text = _extract_choice_text(choice)
     if text is None:
         raise ValueError(_build_empty_content_error(choice))
@@ -584,6 +624,43 @@ def _build_empty_content_error(choice: Any) -> str:
             f"(reasoning_len={reasoning_len}; {description})"
         )
     return f"Empty content in LLM response ({description})"
+
+
+def _log_llm_response_preview(choice: Any, *, endpoint: str, model: str) -> None:
+    if not isinstance(choice, dict):
+        logger.info("LLM raw response: endpoint=%s model=%s choice_type=%s", endpoint, model, type(choice).__name__)
+        return
+
+    finish_reason = choice.get("finish_reason")
+    message = choice.get("message")
+    content_preview = ""
+    reasoning_preview = ""
+
+    if isinstance(message, dict):
+        content = message.get("content")
+        reasoning = message.get("reasoning_content")
+        if isinstance(content, str):
+            content_preview = _short_preview(content)
+        elif isinstance(content, list):
+            content_preview = _short_preview(_extract_message_text(message) or "")
+        if isinstance(reasoning, str):
+            reasoning_preview = _short_preview(reasoning)
+
+    logger.info(
+        "LLM raw response: endpoint=%s model=%s finish_reason=%s content_preview=%r reasoning_preview=%r",
+        endpoint,
+        model,
+        finish_reason,
+        content_preview,
+        reasoning_preview,
+    )
+
+
+def _short_preview(text: str) -> str:
+    normalized = " ".join(text.split()).strip()
+    if len(normalized) <= LLM_LOG_PREVIEW_CHARS:
+        return normalized
+    return normalized[:LLM_LOG_PREVIEW_CHARS].rstrip() + "..."
 
 
 def _describe_choice_shape(choice: Any) -> str:
