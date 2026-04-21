@@ -65,12 +65,12 @@ def test_extract_choice_text_prefers_message_content_when_reasoning_content_pres
     assert _extract_choice_text(choice) == "Я не сплю. Всегда готов помочь!"
 
 
-def test_extract_message_text_falls_back_to_reasoning_content() -> None:
+def test_extract_message_text_ignores_reasoning_content_when_content_is_empty() -> None:
     message = {
         "content": "   ",
         "reasoning_content": "Thinking Process:\nDraft response options:\n* первый\n* второй",
     }
-    assert _extract_message_text(message) == "первый"
+    assert _extract_message_text(message) is None
 
 
 def test_describe_choice_shape_includes_useful_keys() -> None:
