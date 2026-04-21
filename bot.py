@@ -367,6 +367,7 @@ def _build_question_with_context(
     short_memory: str | None = None,
 ) -> str:
     question = _inject_question_hints(question)
+    text_extraction_question = _looks_like_text_extraction_question(question)
     if not visual_context and not reply_text_context and not short_memory:
         return question
     parts = [
@@ -375,7 +376,13 @@ def _build_question_with_context(
         "Не обращайся к пользователю по имени, если он сам не представился в текущем сообщении.",
         f"Вопрос пользователя: {question}",
     ]
-    if short_memory:
+    if visual_context and text_extraction_question:
+        parts.append(
+            "Пользователь хочет прочитать текст с reply-картинки. "
+            "Опирайся только на OCR/label/caption из визуального контекста ниже. "
+            "Не используй короткую память чата, если она не относится к изображению."
+        )
+    elif short_memory:
         parts.append(
             "Короткий контекст последних сообщений. Используй его только если он помогает понять вопрос:\n"
             f"{short_memory}"
@@ -389,6 +396,24 @@ def _build_question_with_context(
             f"Визуальный контекст reply-сообщения:\n{visual_context}"
         )
     return "\n\n".join(parts)
+
+
+def _looks_like_text_extraction_question(question: str) -> bool:
+    lowered = " ".join(question.lower().split())
+    markers = (
+        "что тут написано",
+        "что написано",
+        "какой текст",
+        "прочитай текст",
+        "что за текст",
+        "что на скрине написано",
+        "что на картинке написано",
+        "прочитай",
+        "ocr",
+        "текст с картинки",
+        "текст на картинке",
+    )
+    return any(marker in lowered for marker in markers)
 
 
 def _inject_question_hints(question: str) -> str:
