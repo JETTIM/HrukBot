@@ -395,26 +395,14 @@ def _call_llama_cpp(*, endpoint: str, payload: dict[str, Any], timeout: float) -
 
 def _extract_message_text(message: dict[str, Any]) -> str | None:
     content = message.get("content")
-    if not isinstance(content, str):
-        return None
-    text = content.strip()
-    if not text:
-        return None
-    if _looks_like_reasoning_text(text):
-        return None
-    return text
+    if isinstance(content, str) and content.strip():
+        return content.strip()
 
+    reasoning_content = message.get("reasoning_content")
+    if isinstance(reasoning_content, str) and reasoning_content.strip():
+        return reasoning_content.strip()
 
-def _looks_like_reasoning_text(text: str) -> bool:
-    lowered = text.strip().lower()
-    reasoning_prefixes = (
-        "thinking process",
-        "reasoning:",
-        "chain of thought",
-        "analysis:",
-        "<think>",
-    )
-    return lowered.startswith(reasoning_prefixes)
+    return None
 
 
 def _parse_response_json(raw_content: str) -> tuple[list[str], list[str]] | None:
