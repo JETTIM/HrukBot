@@ -387,10 +387,22 @@ def _call_llama_cpp(*, endpoint: str, payload: dict[str, Any], timeout: float) -
         raise ValueError("No choices in LLM response")
 
     message = choices[0].get("message") or {}
-    content = message.get("content")
-    if not isinstance(content, str) or not content.strip():
+    text = _extract_message_text(message)
+    if text is None:
         raise ValueError("Empty content in LLM response")
-    return content.strip()
+    return text
+
+
+def _extract_message_text(message: dict[str, Any]) -> str | None:
+    content = message.get("content")
+    if isinstance(content, str) and content.strip():
+        return content.strip()
+
+    reasoning_content = message.get("reasoning_content")
+    if isinstance(reasoning_content, str) and reasoning_content.strip():
+        return reasoning_content.strip()
+
+    return None
 
 
 def _parse_response_json(raw_content: str) -> tuple[list[str], list[str]] | None:
