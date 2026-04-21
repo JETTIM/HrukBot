@@ -36,8 +36,13 @@ DEFAULT_MAX_IMAGE_FILE_SIZE_MB = 20.0
 
 try:
     import pytesseract
+    from pytesseract import TesseractNotFoundError
 except ImportError:
     pytesseract = None
+    TesseractNotFoundError = None
+
+
+_ocr_binary_missing_logged = False
 
 
 def get_image_file_id(message: Message) -> str | None:
@@ -170,12 +175,19 @@ def image_dependencies_available() -> bool:
 
 
 def extract_ocr_text(path: Path) -> str | None:
+    global _ocr_binary_missing_logged
+
     if pytesseract is None or Image is None:
         return None
     try:
         with Image.open(path) as image:
             text = pytesseract.image_to_string(image, lang="rus+eng").strip()
-    except Exception:
+    except Exception as exc:
+        if TesseractNotFoundError is not None and isinstance(exc, TesseractNotFoundError):
+            if not _ocr_binary_missing_logged:
+                logger.warning("OCR disabled: tesseract binary not found in PATH")
+                _ocr_binary_missing_logged = True
+            return None
         logger.exception("OCR failed")
         return None
     return text or None
