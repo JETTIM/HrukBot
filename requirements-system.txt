@@ -1,0 +1,10 @@
+# Ubuntu/Debian system dependencies for this project.
+# Install with:
+#   sudo apt update && sudo xargs -a requirements-system.txt apt install -y
+python3
+python3-venv
+python3-pip
+git
+tesseract-ocr
+tesseract-ocr-rus
+tesseract-ocr-eng
