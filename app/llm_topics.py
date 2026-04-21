@@ -70,7 +70,7 @@ def try_extract_topics_and_summary(
             },
         ],
         "temperature": 0.3,
-        "max_tokens": 160,
+        "max_tokens": 240,
     }
     logger.info(
         "LLM topics request: source_items=%s source_chars=%s prompt_chars=%s max_tokens=%s model=%s endpoint=%s",
@@ -155,7 +155,7 @@ def try_generate_svin_joke(
             },
         ],
         "temperature": 0.55,
-        "max_tokens": 180,
+        "max_tokens": 260,
     }
 
     try:
@@ -187,7 +187,7 @@ def try_generate_mood_summary(
         len(messages),
         sum(len(str(item)) for item in messages),
         len(prompt_input),
-        120,
+        220,
         model,
         endpoint,
     )
@@ -209,7 +209,7 @@ def try_generate_mood_summary(
             f"{prompt_input}"
         ),
         temperature=0.45,
-        max_tokens=120,
+        max_tokens=220,
         max_chars=900,
     )
 
@@ -246,7 +246,7 @@ def try_generate_svin_comment(
             "Максимум 8 слов."
         ),
         temperature=0.85,
-        max_tokens=60,
+        max_tokens=100,
         max_chars=120,
     )
     if comment is None:
@@ -280,7 +280,7 @@ def try_generate_roast(
             "1-2 строки на русском, без markdown."
         ),
         temperature=0.9,
-        max_tokens=90,
+        max_tokens=180,
         max_chars=220,
     )
 
