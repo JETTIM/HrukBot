@@ -91,6 +91,8 @@ USE_LLM_TOPICS=false
 LLM_BACKEND=llama_cpp
 LLM_MODEL=local-model
 LLM_ENDPOINT=http://127.0.0.1:8080/v1/chat/completions
+LLM_CHAT_MODEL=local-model
+LLM_CHAT_ENDPOINT=http://127.0.0.1:8080/v1/chat/completions
 LLM_TIMEOUT=10
 ```
 
@@ -98,6 +100,7 @@ LLM_TIMEOUT=10
 - `USE_LLM_TOPICS=false`: всегда используется текущая rule-based логика из `app/topics.py`.
 - `USE_LLM_TOPICS=true`: сначала пробуем LLM для блоков "Основные темы" и "Характер обсуждения".
 - Если LLM недоступна/ошиблась/вернула невалидный JSON: автоматически включается fallback на rule-based без падения бота.
+- `LLM_CHAT_ENDPOINT`/`LLM_CHAT_MODEL`: отдельный endpoint/model для чатовых ответов (`/ask` и reply к боту). Если не заданы, берутся `LLM_ENDPOINT`/`LLM_MODEL`.
 
 ## Команды бота
 

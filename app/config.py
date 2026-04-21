@@ -26,6 +26,8 @@ class Settings:
     llm_backend: str = "llama_cpp"
     llm_model: str = ""
     llm_endpoint: str = "http://127.0.0.1:8080/v1/chat/completions"
+    llm_chat_model: str = ""
+    llm_chat_endpoint: str = ""
     llm_timeout: float = 10.0
 
 
@@ -38,6 +40,9 @@ def get_settings() -> Settings:
     if not allowed_chat_id_raw:
         raise ValueError("ALLOWED_CHAT_ID is not set. Create .env from .env.example.")
 
+    llm_model = os.getenv("LLM_MODEL", "")
+    llm_endpoint = os.getenv("LLM_ENDPOINT", "http://127.0.0.1:8080/v1/chat/completions")
+
     return Settings(
         bot_token=bot_token,
         allowed_chat_id=int(allowed_chat_id_raw),
@@ -48,8 +53,10 @@ def get_settings() -> Settings:
         max_image_file_size_mb=float(os.getenv("MAX_IMAGE_FILE_SIZE_MB", "20")),
         use_llm_topics=_as_bool(os.getenv("USE_LLM_TOPICS", "false")),
         llm_backend=os.getenv("LLM_BACKEND", "llama_cpp"),
-        llm_model=os.getenv("LLM_MODEL", ""),
-        llm_endpoint=os.getenv("LLM_ENDPOINT", "http://127.0.0.1:8080/v1/chat/completions"),
+        llm_model=llm_model,
+        llm_endpoint=llm_endpoint,
+        llm_chat_model=os.getenv("LLM_CHAT_MODEL", llm_model),
+        llm_chat_endpoint=os.getenv("LLM_CHAT_ENDPOINT", llm_endpoint),
         llm_timeout=float(os.getenv("LLM_TIMEOUT", "10")),
     )
 

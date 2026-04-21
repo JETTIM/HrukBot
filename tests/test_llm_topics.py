@@ -1,6 +1,11 @@
 from __future__ import annotations
 
-from app.llm_topics import _clean_plain_text, _extract_choice_text, _extract_message_text
+from app.llm_topics import (
+    _clean_plain_text,
+    _describe_choice_shape,
+    _extract_choice_text,
+    _extract_message_text,
+)
 
 
 def test_extract_message_text_prefers_content() -> None:
@@ -66,6 +71,17 @@ def test_extract_message_text_falls_back_to_reasoning_content() -> None:
         "reasoning_content": "Thinking Process:\nDraft response options:\n* первый\n* второй",
     }
     assert _extract_message_text(message) == "первый"
+
+
+def test_describe_choice_shape_includes_useful_keys() -> None:
+    choice = {
+        "finish_reason": "stop",
+        "message": {"role": "assistant", "content": "ok", "reasoning_content": "think"},
+    }
+    description = _describe_choice_shape(choice)
+    assert "choice_keys=[finish_reason,message]" in description
+    assert "finish_reason='stop'" in description
+    assert "message_keys=[content,reasoning_content,role]" in description
 
 
 def test_clean_plain_text_extracts_best_draft_option() -> None:

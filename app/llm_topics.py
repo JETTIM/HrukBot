@@ -390,8 +390,28 @@ def _call_llama_cpp(*, endpoint: str, payload: dict[str, Any], timeout: float) -
 
     text = _extract_choice_text(choices[0])
     if text is None:
-        raise ValueError("Empty content in LLM response")
+        raise ValueError(f"Empty content in LLM response ({_describe_choice_shape(choices[0])})")
     return text
+
+
+def _describe_choice_shape(choice: Any) -> str:
+    if not isinstance(choice, dict):
+        return f"choice_type={type(choice).__name__}"
+
+    keys = ",".join(sorted(str(key) for key in choice.keys()))
+    finish_reason = choice.get("finish_reason")
+    message = choice.get("message")
+    if isinstance(message, dict):
+        message_keys = ",".join(sorted(str(key) for key in message.keys()))
+    else:
+        message_keys = "-"
+
+    return (
+        f"choice_keys=[{keys}] "
+        f"finish_reason={finish_reason!r} "
+        f"message_type={type(message).__name__} "
+        f"message_keys=[{message_keys}]"
+    )
 
 
 def _extract_choice_text(choice: Any) -> str | None:
