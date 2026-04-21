@@ -356,6 +356,19 @@ def update_image_event_processed(
     conn.commit()
 
 
+def update_image_event_status(*, event_id: int, processing_status: str) -> None:
+    conn = _require_connection()
+    conn.execute(
+        """
+        UPDATE image_events
+        SET processing_status = ?
+        WHERE id = ?
+        """,
+        (processing_status, event_id),
+    )
+    conn.commit()
+
+
 def update_image_event_failed(
     *,
     event_id: int,

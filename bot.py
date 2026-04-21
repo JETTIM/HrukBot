@@ -307,7 +307,7 @@ def _format_reply_visual_status(message: Message) -> str:
     elif status == "failed":
         lines.append("— статус: не изучен, обработка не удалась или файл был пропущен")
     else:
-        lines.append(f"— статус: {status}")
+        lines.append(f"— статус: {_format_visual_processing_stage(status)}")
 
     if cluster_id:
         lines.append(f"— cluster: #{cluster_id}")
@@ -325,6 +325,21 @@ def _format_reply_visual_status(message: Message) -> str:
         lines.append(f"— обработан: {processed_at}")
 
     return "\n".join(lines)
+
+
+def _format_visual_processing_stage(status: str) -> str:
+    normalized = (status or "").strip().lower()
+    stage_map = {
+        "pending": "ожидает обработки (0%)",
+        "queued": "в очереди (10%)",
+        "downloading": "скачивает файл (30%)",
+        "hashing": "считает хэш (50%)",
+        "ocr": "распознаёт текст (70%)",
+        "clustering": "сопоставляет с визуальной памятью (85%)",
+        "processed": "изучен (100%)",
+        "failed": "обработка не удалась (100%)",
+    }
+    return stage_map.get(normalized, normalized or "неизвестно")
 
 
 def _build_reply_text_context(message: Message, bot_username: str | None, bot_id: int) -> str | None:
