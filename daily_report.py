@@ -53,6 +53,51 @@ def build_topics_source(messages: list[dict[str, Any]]) -> list[str]:
     return [str(row.get("text") or "") for row in messages]
 
 
+def _build_llm_topics_digest(
+    messages: list[dict[str, Any]],
+    stats: Any,
+    user_names: dict[int, str],
+) -> list[str]:
+    topic_source = build_topics_source(messages)
+    draft_topics = extract_main_topics(topic_source, top_k=4)
+    non_empty_messages = [
+        " ".join(str(row.get("text") or "").split()).strip()
+        for row in messages
+        if str(row.get("text") or "").strip()
+    ]
+
+    digest: list[str] = [f"Всего сообщений за день: {stats.total_messages}"]
+
+    if stats.messages_by_user:
+        top_users = sorted(
+            stats.messages_by_user.items(),
+            key=lambda item: item[1],
+            reverse=True,
+        )[:3]
+        digest.append(
+            "Топ участников: "
+            + "; ".join(
+                f"{user_names.get(user_id, f'user_id={user_id}')}={count}"
+                for user_id, count in top_users
+            )
+        )
+
+    if stats.most_active_period:
+        digest.append(f"Пик активности: {stats.most_active_period}")
+
+    compact_topics = [topic for topic in draft_topics if "короткое" not in topic.lower()]
+    if compact_topics:
+        digest.append("Черновые темы: " + "; ".join(compact_topics[:4]))
+
+    if non_empty_messages:
+        sample_size = min(8, len(non_empty_messages))
+        step = max(1, len(non_empty_messages) // sample_size)
+        sampled_messages = non_empty_messages[::step][:sample_size]
+        digest.extend(f"Пример: {text[:120]}" for text in sampled_messages if text[:120])
+
+    return digest
+
+
 def _is_summary_too_similar_to_topics(topics: list[str], summary_lines: list[str]) -> bool:
     normalized_topics = {topic.strip().lower() for topic in topics if topic.strip()}
     normalized_summary = [line.strip().lower() for line in summary_lines if line.strip()]
@@ -78,6 +123,7 @@ def build_topics_and_summary_lines(
         return (topics, summary_lines, used_llm) if return_meta else (topics, summary_lines)
 
     topic_source = build_topics_source(messages)
+    llm_topic_source = _build_llm_topics_digest(messages, stats, user_names)
     if not settings.use_llm_topics:
         logger.info("LLM topics disabled; using rule-based topics")
         topics = extract_main_topics(topic_source, top_k=4)
@@ -85,12 +131,30 @@ def build_topics_and_summary_lines(
         return (topics, summary_lines, used_llm) if return_meta else (topics, summary_lines)
 
     llm_result = try_extract_topics_and_summary(
-        topic_source,
+        llm_topic_source,
         backend=settings.llm_backend,
         model=settings.llm_model,
         endpoint=settings.llm_endpoint,
         timeout=settings.llm_timeout,
     )
+    if llm_result is None:
+        rewrite_model = str(getattr(settings, "llm_chat_model", "") or "").strip()
+        rewrite_endpoint = str(getattr(settings, "llm_chat_endpoint", "") or "").strip()
+        primary_model = str(getattr(settings, "llm_model", "") or "").strip()
+        primary_endpoint = str(getattr(settings, "llm_endpoint", "") or "").strip()
+        if rewrite_model and rewrite_endpoint and (rewrite_model != primary_model or rewrite_endpoint != primary_endpoint):
+            logger.info(
+                "LLM topics primary failed; retrying with chat model model=%s endpoint=%s",
+                rewrite_model,
+                rewrite_endpoint,
+            )
+            llm_result = try_extract_topics_and_summary(
+                llm_topic_source,
+                backend=settings.llm_backend,
+                model=rewrite_model,
+                endpoint=rewrite_endpoint,
+                timeout=settings.llm_timeout,
+            )
     if llm_result is not None:
         logger.info("LLM topics used")
         used_llm = True

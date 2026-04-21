@@ -69,6 +69,15 @@ def try_extract_topics_and_summary(
         "temperature": 0.3,
         "max_tokens": 160,
     }
+    logger.info(
+        "LLM topics request: source_items=%s source_chars=%s prompt_chars=%s max_tokens=%s model=%s endpoint=%s",
+        len(messages),
+        sum(len(str(item)) for item in messages),
+        len(prompt_input),
+        payload.get("max_tokens"),
+        model,
+        endpoint,
+    )
 
     try:
         raw_content = _call_llama_cpp_with_retries(
@@ -456,15 +465,21 @@ def _call_llama_cpp_with_retries(*, endpoint: str, payload: dict[str, Any], time
         except HTTPError as exc:
             last_error = exc
             if _is_context_size_error(exc) and _shrink_payload_user_prompt(current_payload):
-                prompt_reduced = True
-                logger.warning("LLM request exceeded context size, retrying with shorter prompt")
+                logger.warning(
+                    "LLM request exceeded context size, retrying with shorter prompt prompt_chars=%s max_tokens=%s",
+                    _get_user_prompt_chars(current_payload),
+                    current_payload.get("max_tokens"),
+                )
                 continue
             raise
         except ValueError as exc:
             last_error = exc
-            if _is_empty_length_response_error(exc) and _reduce_payload_max_tokens(current_payload):
-                tokens_reduced = True
-                logger.warning("LLM returned empty truncated response, retrying with fewer max_tokens")
+            if _is_empty_length_response_error(exc) and _shrink_payload_user_prompt(current_payload):
+                logger.warning(
+                    "LLM returned truncated reasoning before final content, retrying with shorter prompt prompt_chars=%s max_tokens=%s",
+                    _get_user_prompt_chars(current_payload),
+                    current_payload.get("max_tokens"),
+                )
                 continue
             raise
 
@@ -488,9 +503,10 @@ def _call_llama_cpp(*, endpoint: str, payload: dict[str, Any], timeout: float) -
     if not choices:
         raise ValueError("No choices in LLM response")
 
-    text = _extract_choice_text(choices[0])
+    choice = choices[0]
+    text = _extract_choice_text(choice)
     if text is None:
-        raise ValueError(f"Empty content in LLM response ({_describe_choice_shape(choices[0])})")
+        raise ValueError(_build_empty_content_error(choice))
     return text
 
 
@@ -503,7 +519,7 @@ def _is_context_size_error(exc: HTTPError) -> bool:
 
 def _is_empty_length_response_error(exc: ValueError) -> bool:
     message = str(exc)
-    return "Empty content in LLM response" in message and "finish_reason='length'" in message
+    return "finish_reason='length'" in message or "LLM exhausted tokens before final content was produced" in message
 
 
 def _shrink_payload_user_prompt(payload: dict[str, Any]) -> bool:
@@ -536,6 +552,38 @@ def _reduce_payload_max_tokens(payload: dict[str, Any]) -> bool:
         return False
     payload["max_tokens"] = max(MIN_MAX_TOKENS, int(max_tokens * 0.5))
     return True
+
+
+def _get_user_prompt_chars(payload: dict[str, Any]) -> int:
+    messages = payload.get("messages")
+    if not isinstance(messages, list) or not messages:
+        return 0
+    message = messages[-1]
+    if not isinstance(message, dict):
+        return 0
+    content = message.get("content")
+    return len(content) if isinstance(content, str) else 0
+
+
+def _build_empty_content_error(choice: Any) -> str:
+    description = _describe_choice_shape(choice)
+    if not isinstance(choice, dict):
+        return f"Empty content in LLM response ({description})"
+
+    finish_reason = choice.get("finish_reason")
+    message = choice.get("message")
+    reasoning_len = 0
+    if isinstance(message, dict):
+        reasoning = message.get("reasoning_content")
+        if isinstance(reasoning, str):
+            reasoning_len = len(reasoning.strip())
+
+    if finish_reason == "length" and reasoning_len > 0:
+        return (
+            "LLM exhausted tokens before final content was produced "
+            f"(reasoning_len={reasoning_len}; {description})"
+        )
+    return f"Empty content in LLM response ({description})"
 
 
 def _describe_choice_shape(choice: Any) -> str:
