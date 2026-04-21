@@ -161,13 +161,25 @@ def _log_incoming_command(message: Message) -> None:
 def _reply_has_visual_file(message: Message) -> bool:
     if not ENABLE_VISUAL_FEATURES:
         return False
-    return bool(message.reply_to_message and get_image_file_id(message.reply_to_message))
+    source = _find_visual_source_message(message, include_self=False)
+    return source is not None
 
 
 def _message_has_visual_file(message: Message) -> bool:
     if not ENABLE_VISUAL_FEATURES:
         return False
     return get_image_file_id(message) is not None
+
+
+def _find_visual_source_message(message: Message, *, include_self: bool) -> Message | None:
+    current = message if include_self else message.reply_to_message
+    depth = 0
+    while current is not None and depth < 6:
+        if get_image_file_id(current) is not None:
+            return current
+        current = current.reply_to_message
+        depth += 1
+    return None
 
 
 def _extract_question_or_visual_default(message: Message) -> str:
@@ -233,7 +245,7 @@ def _normalize_reply_question(question: str, reply_text_context: str | None) -> 
 def _build_reply_visual_context(message: Message) -> str | None:
     if not ENABLE_VISUAL_FEATURES:
         return None
-    reply = message.reply_to_message
+    reply = _find_visual_source_message(message, include_self=False)
     if not reply:
         return None
 
@@ -341,10 +353,8 @@ async def _wait_for_message_visual_context(message: Message, settings: object) -
 async def _ensure_reply_visual_processing(message: Message) -> bool:
     if not ENABLE_VISUAL_FEATURES:
         return False
-    reply = message.reply_to_message
+    reply = _find_visual_source_message(message, include_self=False)
     if not reply:
-        return False
-    if get_image_file_id(reply) is None:
         return False
 
     existing_event = get_image_event_by_message(chat_id=reply.chat.id, message_id=reply.message_id)
@@ -383,12 +393,9 @@ async def _ensure_message_visual_processing(message: Message, settings: object) 
 def _format_reply_visual_status(message: Message) -> str:
     if not ENABLE_VISUAL_FEATURES:
         return "Визуальная обработка временно отключена."
-    reply = message.reply_to_message
+    reply = _find_visual_source_message(message, include_self=False)
     if not reply:
         return "Ответь командой /seen на картинку, GIF или image-файл."
-
-    if get_image_file_id(reply) is None:
-        return "В reply-сообщении нет картинки/GIF/image-файла."
 
     event = get_image_event_by_message(chat_id=reply.chat.id, message_id=reply.message_id)
     if not event:
@@ -581,9 +588,9 @@ def _build_question_with_context(
         parts.append(f"Сообщение бота, на которое ответил пользователь:\n{reply_text_context}")
     if visual_context:
         parts.append(
-            "Если вопрос относится к reply-картинке, используй только сохранённый визуальный контекст ниже. "
+            "Если вопрос относится к картинке, используй только сохранённый визуальный контекст ниже. "
             "Не утверждай, что видишь изображение напрямую.\n"
-            f"Визуальный контекст reply-сообщения:\n{visual_context}"
+            f"Визуальный контекст изображения:\n{visual_context}"
         )
     return "\n\n".join(parts)
 
@@ -799,8 +806,12 @@ def _looks_like_meta_llm_line(text: str) -> bool:
         "я обязан сообщить",
         "не имею доступа",
         "я не вижу фото",
+        "я ее не вижу",
+        "я её не вижу",
         "я не вижу изображение",
         "я не могу видеть изображение",
+        "я ее не могу видеть",
+        "я её не могу видеть",
         "я не могу просматривать изображения",
         "не могу увидеть фото",
     )
