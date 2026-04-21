@@ -120,9 +120,10 @@ def _should_try_svin_reply(today_messages_count: int) -> bool:
 
 
 def _extract_command_args(message: Message) -> str:
-    if not message.text:
+    raw_text = message.text or message.caption
+    if not raw_text:
         return ""
-    text = message.text.strip()
+    text = raw_text.strip()
     parts = text.split(maxsplit=1)
     if not parts:
         return ""
