@@ -12,6 +12,8 @@ logger = logging.getLogger(__name__)
 
 MAX_MESSAGES = 500
 MAX_INPUT_CHARS = 3500
+MIN_INPUT_CHARS = 700
+MIN_MAX_TOKENS = 48
 
 SYSTEM_PROMPT = (
     "Ты анализируешь переписку Telegram-чата.\n"
@@ -52,13 +54,7 @@ def try_extract_topics_and_summary(
             {"role": "system", "content": SYSTEM_PROMPT},
             {
                 "role": "user",
-                "content": (
-                    "Ниже сообщения Telegram-чата за день.\n"
-                    "Нужно выделить 2-5 основных тем и 1-2 фразы для блока 'Характер обсуждения'.\n"
-                    "Ответ верни строго JSON с полями topics и summary_lines.\n\n"
-                    "Сообщения:\n"
-                    f"{prompt_input}"
-                ),
+                "content": _build_topics_user_prompt(prompt_input),
             },
         ],
         "temperature": 0.3,
@@ -66,7 +62,7 @@ def try_extract_topics_and_summary(
     }
 
     try:
-        raw_content = _call_llama_cpp(
+        raw_content = _call_llama_cpp_with_retries(
             endpoint=endpoint,
             payload={**payload, "response_format": {"type": "json_object"}},
             timeout=timeout,
@@ -80,7 +76,7 @@ def try_extract_topics_and_summary(
             _read_http_error(exc),
         )
         try:
-            raw_content = _call_llama_cpp(endpoint=endpoint, payload=payload, timeout=timeout)
+            raw_content = _call_llama_cpp_with_retries(endpoint=endpoint, payload=payload, timeout=timeout)
         except HTTPError as retry_exc:
             logger.exception("LLM topics retry failed: %s", _read_http_error(retry_exc))
             return None
@@ -380,7 +376,7 @@ def _try_generate_plain_text(
     }
 
     try:
-        text = _call_llama_cpp(endpoint=endpoint, payload=payload, timeout=timeout)
+        text = _call_llama_cpp_with_retries(endpoint=endpoint, payload=payload, timeout=timeout)
     except HTTPError as exc:
         logger.exception("LLM plain text request failed: %s", _read_http_error(exc))
         return None
@@ -406,6 +402,43 @@ def _read_http_error(exc: HTTPError) -> str:
         return f"HTTP {exc.code}"
 
 
+def _build_topics_user_prompt(prompt_input: str) -> str:
+    return (
+        "Ниже сообщения Telegram-чата за день.\n"
+        "Нужно выделить 2-5 основных тем и 1-2 фразы для блока 'Характер обсуждения'.\n"
+        "Ответ верни строго JSON с полями topics и summary_lines.\n\n"
+        "Сообщения:\n"
+        f"{prompt_input}"
+    )
+
+
+def _call_llama_cpp_with_retries(*, endpoint: str, payload: dict[str, Any], timeout: float) -> str:
+    current_payload = json.loads(json.dumps(payload))
+    last_error: Exception | None = None
+
+    for _attempt in range(3):
+        try:
+            return _call_llama_cpp(endpoint=endpoint, payload=current_payload, timeout=timeout)
+        except HTTPError as exc:
+            last_error = exc
+            if _is_context_size_error(exc) and _shrink_payload_user_prompt(current_payload):
+                prompt_reduced = True
+                logger.warning("LLM request exceeded context size, retrying with shorter prompt")
+                continue
+            raise
+        except ValueError as exc:
+            last_error = exc
+            if _is_empty_length_response_error(exc) and _reduce_payload_max_tokens(current_payload):
+                tokens_reduced = True
+                logger.warning("LLM returned empty truncated response, retrying with fewer max_tokens")
+                continue
+            raise
+
+    if last_error is not None:
+        raise last_error
+    raise ValueError("LLM request failed after retries")
+
+
 def _call_llama_cpp(*, endpoint: str, payload: dict[str, Any], timeout: float) -> str:
     req = Request(
         url=endpoint,
@@ -425,6 +458,50 @@ def _call_llama_cpp(*, endpoint: str, payload: dict[str, Any], timeout: float) -
     if text is None:
         raise ValueError(f"Empty content in LLM response ({_describe_choice_shape(choices[0])})")
     return text
+
+
+def _is_context_size_error(exc: HTTPError) -> bool:
+    if exc.code not in {400, 413, 422}:
+        return False
+    error_text = _read_http_error(exc).lower()
+    return "context size" in error_text or "exceeds the available context size" in error_text
+
+
+def _is_empty_length_response_error(exc: ValueError) -> bool:
+    message = str(exc)
+    return "Empty content in LLM response" in message and "finish_reason='length'" in message
+
+
+def _shrink_payload_user_prompt(payload: dict[str, Any]) -> bool:
+    messages = payload.get("messages")
+    if not isinstance(messages, list) or len(messages) < 2:
+        return False
+
+    user_message = messages[-1]
+    if not isinstance(user_message, dict):
+        return False
+
+    content = user_message.get("content")
+    if not isinstance(content, str):
+        return False
+
+    current_length = len(content)
+    if current_length <= MIN_INPUT_CHARS:
+        return False
+
+    new_length = max(MIN_INPUT_CHARS, int(current_length * 0.7))
+    user_message["content"] = content[:new_length].rstrip()
+    return True
+
+
+def _reduce_payload_max_tokens(payload: dict[str, Any]) -> bool:
+    max_tokens = payload.get("max_tokens")
+    if not isinstance(max_tokens, int):
+        return False
+    if max_tokens <= MIN_MAX_TOKENS:
+        return False
+    payload["max_tokens"] = max(MIN_MAX_TOKENS, int(max_tokens * 0.5))
+    return True
 
 
 def _describe_choice_shape(choice: Any) -> str:

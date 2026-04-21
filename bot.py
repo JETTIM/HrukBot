@@ -133,6 +133,30 @@ def _extract_command_args(message: Message) -> str:
     return parts[1].strip() if len(parts) > 1 else ""
 
 
+def _extract_command_text(message: Message) -> str:
+    raw_text = (message.text or message.caption or "").strip()
+    if not raw_text.startswith("/"):
+        return ""
+    return raw_text
+
+
+def _log_incoming_command(message: Message) -> None:
+    command_text = _extract_command_text(message)
+    if not command_text:
+        return
+
+    user = message.from_user
+    logger.info(
+        "Incoming command: chat_id=%s message_id=%s user_id=%s username=%s full_name=%s text=%r",
+        message.chat.id,
+        message.message_id,
+        user.id if user else None,
+        user.username if user else None,
+        user.full_name if user else None,
+        command_text[:500],
+    )
+
+
 def _reply_has_visual_file(message: Message) -> bool:
     if not ENABLE_VISUAL_FEATURES:
         return False
@@ -724,6 +748,7 @@ async def main() -> None:
     async def on_mood(message: Message) -> None:
         if message.chat.id != settings.allowed_chat_id:
             return
+        _log_incoming_command(message)
         await _safe_delete_command_message(bot, message)
 
         pending_message, pending_started = await _send_pending(message)
@@ -745,6 +770,7 @@ async def main() -> None:
     async def on_svin(message: Message) -> None:
         if message.chat.id != settings.allowed_chat_id:
             return
+        _log_incoming_command(message)
         await _safe_delete_command_message(bot, message)
 
         pending_message, pending_started = await _send_pending(message)
@@ -765,6 +791,7 @@ async def main() -> None:
     async def on_ask(message: Message) -> None:
         if message.chat.id != settings.allowed_chat_id:
             return
+        _log_incoming_command(message)
 
         question = _extract_question_or_visual_default(message)
         reply_text_context = _build_reply_text_context(message, bot_info.username, bot_info.id)
@@ -812,6 +839,7 @@ async def main() -> None:
     async def on_visual(message: Message) -> None:
         if message.chat.id != settings.allowed_chat_id:
             return
+        _log_incoming_command(message)
         await _safe_delete_command_message(bot, message)
 
         pending_message, pending_started = await _send_pending(message)
@@ -821,6 +849,7 @@ async def main() -> None:
     async def on_seen(message: Message) -> None:
         if message.chat.id != settings.allowed_chat_id:
             return
+        _log_incoming_command(message)
         await _safe_delete_command_message(bot, message)
 
         pending_message, pending_started = await _send_pending(message)
@@ -830,6 +859,7 @@ async def main() -> None:
     async def on_chance(message: Message) -> None:
         if message.chat.id != settings.allowed_chat_id:
             return
+        _log_incoming_command(message)
         await _safe_delete_command_message(bot, message)
 
         global _svin_reply_chance
@@ -869,6 +899,7 @@ async def main() -> None:
     async def on_llmroute(message: Message) -> None:
         if message.chat.id != settings.allowed_chat_id:
             return
+        _log_incoming_command(message)
         await _safe_delete_command_message(bot, message)
 
         primary = f"{settings.llm_model or '-'} @ {settings.llm_endpoint or '-'}"
@@ -892,6 +923,7 @@ async def main() -> None:
     async def on_roast(message: Message) -> None:
         if message.chat.id != settings.allowed_chat_id:
             return
+        _log_incoming_command(message)
         await _safe_delete_command_message(bot, message)
 
         target = _extract_command_args(message).strip()
@@ -919,6 +951,8 @@ async def main() -> None:
     async def on_message(message: Message) -> None:
         if message.chat.id != settings.allowed_chat_id:
             return
+        if _extract_command_text(message):
+            _log_incoming_command(message)
         if message.text and message.text.strip().lower().startswith((
             "/stats",
             "/svin",
