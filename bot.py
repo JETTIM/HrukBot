@@ -751,6 +751,29 @@ async def main() -> None:
             disable_notification=True,
         )
 
+    @router.message(Command("llmroute"))
+    async def on_llmroute(message: Message) -> None:
+        if message.chat.id != settings.allowed_chat_id:
+            return
+        await _safe_delete_command_message(bot, message)
+
+        primary = f"{settings.llm_model or '-'} @ {settings.llm_endpoint or '-'}"
+        rewrite = f"{settings.llm_chat_model or '-'} @ {settings.llm_chat_endpoint or '-'}"
+        rewrite_enabled = (
+            bool(settings.llm_chat_model and settings.llm_chat_endpoint)
+            and not (
+                settings.llm_chat_model == settings.llm_model
+                and settings.llm_chat_endpoint == settings.llm_endpoint
+            )
+        )
+        text = (
+            "🧠 Текущий LLM маршрут:\n"
+            f"• primary: {primary}\n"
+            f"• rewrite: {rewrite}\n"
+            f"• rewrite_enabled: {'yes' if rewrite_enabled else 'no'}"
+        )
+        await message.answer(escape(text), disable_notification=True)
+
     @router.message(Command("roast"))
     async def on_roast(message: Message) -> None:
         if message.chat.id != settings.allowed_chat_id:
@@ -793,6 +816,7 @@ async def main() -> None:
             "/visual",
             "/seen",
             "/chance",
+            "/llmroute",
             "/roast",
         )):
             return
