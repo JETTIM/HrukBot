@@ -453,12 +453,32 @@ def _sanitize_chat_answer(text: str) -> str:
         if re.match(r"^\*?\s*attempt\s*\*?$", line, flags=re.IGNORECASE):
             continue
         line = re.sub(r"^\s*(input message|message|context)\s*:\s*", "", line, flags=re.IGNORECASE)
+        if _looks_like_meta_llm_line(line):
+            continue
         if line:
             cleaned_lines.append(line)
 
     if not cleaned_lines:
-        return text.strip()
+        return "Сформулируй вопрос чуть точнее, и я отвечу."
     return "\n".join(cleaned_lines)
+
+
+def _looks_like_meta_llm_line(text: str) -> bool:
+    lowered = " ".join(text.lower().split())
+    markers = (
+        "since i cannot see the photo",
+        "i cannot see the photo",
+        "cannot view the image",
+        "i cannot view images",
+        "i can't view images",
+        "as an ai language model",
+        "как языковая модель",
+        "я не вижу фото",
+        "я не могу видеть изображение",
+        "я не могу просматривать изображения",
+        "не могу увидеть фото",
+    )
+    return any(marker in lowered for marker in markers)
 
 
 async def _safe_delete_command_message(bot: Bot, message: Message) -> None:
