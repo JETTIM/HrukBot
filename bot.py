@@ -413,10 +413,26 @@ def _maybe_rewrite_chat_answer(answer: str, settings: object) -> str:
         timeout=float(getattr(settings, "llm_timeout", 10.0)),
     )
     if rewritten:
+        if _looks_like_rewrite_refusal(rewritten):
+            logger.info("LLM chat rewrite returned refusal/meta text, using primary answer")
+            return answer
         logger.info("LLM chat rewrite applied successfully")
         return rewritten
     logger.info("LLM chat rewrite failed, using primary answer")
     return answer
+
+
+def _looks_like_rewrite_refusal(text: str) -> bool:
+    lowered = " ".join(text.lower().split())
+    refusal_markers = (
+        "извините, но я не могу",
+        "не могу переписать",
+        "не имею доступа",
+        "не могу помочь с этим",
+        "как языковая модель",
+        "как модель",
+    )
+    return any(marker in lowered for marker in refusal_markers)
 
 
 def _sanitize_chat_answer(text: str) -> str:
