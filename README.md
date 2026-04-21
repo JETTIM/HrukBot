@@ -17,6 +17,7 @@ Python Telegram-бот для сбора сообщений, расчета дн
 ├── bot.py
 ├── daily_report.py
 ├── requirements.txt
+├── requirements-system.txt
 └── .env.example
 ```
 
@@ -28,7 +29,14 @@ Python Telegram-бот для сбора сообщений, расчета дн
 
 ```bash
 sudo apt update
-sudo apt install -y python3 python3-venv python3-pip git
+sudo apt install -y python3 python3-venv python3-pip git tesseract-ocr tesseract-ocr-rus tesseract-ocr-eng
+```
+
+Или можно установить системные зависимости из файла:
+
+```bash
+sudo apt update
+sudo xargs -a requirements-system.txt apt install -y
 ```
 
 ### 2. Склонировать проект
