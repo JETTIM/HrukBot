@@ -286,6 +286,38 @@ def try_answer_question(
     )
 
 
+def try_rewrite_assistant_answer(
+    answer: str,
+    *,
+    backend: str,
+    model: str,
+    endpoint: str,
+    timeout: float,
+) -> str | None:
+    answer = answer.strip()
+    if not answer:
+        return None
+
+    return _try_generate_plain_text(
+        backend=backend,
+        model=model,
+        endpoint=endpoint,
+        timeout=timeout,
+        system_prompt=(
+            "Ты редактор ответов Telegram-бота. "
+            "Сохраняй смысл исходного ответа, но убирай мета-мусор вроде Attempt/Context. "
+            "Пиши естественно на русском, 1-3 коротких предложения, без markdown."
+        ),
+        user_prompt=(
+            "Перепиши ответ другой модели в нормальный чатовый формат.\n\n"
+            f"{answer[:1500]}"
+        ),
+        temperature=0.25,
+        max_tokens=220,
+        max_chars=900,
+    )
+
+
 def try_generate_image_cluster_summary(
     context_lines: Sequence[str],
     *,
@@ -388,21 +420,92 @@ def _call_llama_cpp(*, endpoint: str, payload: dict[str, Any], timeout: float) -
     if not choices:
         raise ValueError("No choices in LLM response")
 
-    message = choices[0].get("message") or {}
-    text = _extract_message_text(message)
+    text = _extract_choice_text(choices[0])
     if text is None:
-        raise ValueError("Empty content in LLM response")
+        raise ValueError(f"Empty content in LLM response ({_describe_choice_shape(choices[0])})")
     return text
+
+
+def _describe_choice_shape(choice: Any) -> str:
+    if not isinstance(choice, dict):
+        return f"choice_type={type(choice).__name__}"
+
+    keys = ",".join(sorted(str(key) for key in choice.keys()))
+    finish_reason = choice.get("finish_reason")
+    message = choice.get("message")
+    if isinstance(message, dict):
+        message_keys = ",".join(sorted(str(key) for key in message.keys()))
+    else:
+        message_keys = "-"
+
+    return (
+        f"choice_keys=[{keys}] "
+        f"finish_reason={finish_reason!r} "
+        f"message_type={type(message).__name__} "
+        f"message_keys=[{message_keys}]"
+    )
+
+
+def _extract_choice_text(choice: Any) -> str | None:
+    if not isinstance(choice, dict):
+        return None
+
+    message = choice.get("message")
+    if isinstance(message, dict):
+        message_text = _extract_message_text(message)
+        if message_text:
+            return message_text
+
+    delta = choice.get("delta")
+    if isinstance(delta, dict):
+        delta_text = _extract_message_text(delta)
+        if delta_text:
+            return delta_text
+
+    text = choice.get("text")
+    if isinstance(text, str):
+        normalized_text = text.strip()
+        if normalized_text:
+            return normalized_text
+
+    return None
 
 
 def _extract_message_text(message: dict[str, Any]) -> str | None:
     content = message.get("content")
-    if not isinstance(content, str):
-        return None
-    text = content.strip()
-    if not text:
-        return None
-    return text
+    if isinstance(content, str):
+        text = content.strip()
+        if text:
+            return text
+    elif isinstance(content, list):
+        parts: list[str] = []
+        for item in content:
+            if not isinstance(item, dict):
+                continue
+            text_value = item.get("text")
+            if not isinstance(text_value, str):
+                continue
+            normalized = text_value.strip()
+            if normalized:
+                parts.append(normalized)
+        if parts:
+            return "\n".join(parts)
+
+    text_field = message.get("text")
+    if isinstance(text_field, str):
+        normalized_text_field = text_field.strip()
+        if normalized_text_field:
+            return normalized_text_field
+
+    reasoning_content = message.get("reasoning_content")
+    if isinstance(reasoning_content, str):
+        stripped_reasoning = reasoning_content.strip()
+        if _looks_like_reasoning_text(stripped_reasoning):
+            normalized_reasoning = _sanitize_reasoning_output(stripped_reasoning)
+            if normalized_reasoning:
+                return normalized_reasoning
+
+    return None
 
 
 def _looks_like_reasoning_text(text: str) -> bool:

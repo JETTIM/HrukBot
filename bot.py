@@ -39,6 +39,7 @@ from app.llm_topics import (
     try_generate_roast,
     try_generate_svin_comment,
     try_generate_svin_joke,
+    try_rewrite_assistant_answer,
 )
 from app.report import activity_by_hour, calculate_daily_stats, format_daily_report
 from daily_report import build_topics_and_summary_lines, build_user_names
@@ -382,6 +383,27 @@ def _normalize_llm_text_block(text: str, max_lines: int = 3) -> str:
     return "\n".join(lines) if lines else text.strip()
 
 
+def _maybe_rewrite_chat_answer(answer: str, settings: object) -> str:
+    primary_endpoint = str(getattr(settings, "llm_endpoint", "") or "").strip()
+    primary_model = str(getattr(settings, "llm_model", "") or "").strip()
+    rewrite_endpoint = str(getattr(settings, "llm_chat_endpoint", "") or "").strip()
+    rewrite_model = str(getattr(settings, "llm_chat_model", "") or "").strip()
+
+    if not rewrite_endpoint or not rewrite_model:
+        return answer
+    if rewrite_endpoint == primary_endpoint and rewrite_model == primary_model:
+        return answer
+
+    rewritten = try_rewrite_assistant_answer(
+        answer,
+        backend=getattr(settings, "llm_backend", "llama_cpp"),
+        model=rewrite_model,
+        endpoint=rewrite_endpoint,
+        timeout=float(getattr(settings, "llm_timeout", 10.0)),
+    )
+    return rewritten or answer
+
+
 async def _safe_delete_command_message(bot: Bot, message: Message) -> None:
     text = (message.text or "").strip()
     if not text.startswith("/"):
@@ -451,13 +473,15 @@ async def main() -> None:
     )
     bot_info = await bot.get_me()
     logger.info(
-        "Bot runtime config: username=@%s id=%s use_llm_topics=%s enable_image_processing=%s visual_features=%s image_pipeline_available=%s",
+        "Bot runtime config: username=@%s id=%s use_llm_topics=%s enable_image_processing=%s visual_features=%s image_pipeline_available=%s llm_endpoint=%s llm_chat_endpoint=%s",
         bot_info.username,
         bot_info.id,
         settings.use_llm_topics,
         settings.enable_image_processing,
         ENABLE_VISUAL_FEATURES,
         IMAGE_PIPELINE_AVAILABLE,
+        settings.llm_endpoint,
+        settings.llm_chat_endpoint,
     )
     dp = Dispatcher()
     router = Router()
@@ -635,6 +659,7 @@ async def main() -> None:
         if answer is None:
             await _finish_pending(pending_message, pending_started, "Не смогла получить ответ от LLM.")
             return
+        answer = _maybe_rewrite_chat_answer(answer, settings)
         await _finish_pending(pending_message, pending_started, escape(answer))
 
     @router.message(Command("visual"))
@@ -815,6 +840,7 @@ async def main() -> None:
                     timeout=settings.llm_timeout,
                 )
                 if answer is not None:
+                    answer = _maybe_rewrite_chat_answer(answer, settings)
                     await _finish_pending(pending_message, pending_started, escape(answer))
                     return
                 await _finish_pending(pending_message, pending_started, "Не смогла получить ответ от LLM.")

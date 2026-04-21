@@ -17,6 +17,7 @@ Python Telegram-бот для сбора сообщений, расчета дн
 ├── bot.py
 ├── daily_report.py
 ├── requirements.txt
+├── requirements-system.txt
 └── .env.example
 ```
 
@@ -28,7 +29,14 @@ Python Telegram-бот для сбора сообщений, расчета дн
 
 ```bash
 sudo apt update
-sudo apt install -y python3 python3-venv python3-pip git
+sudo apt install -y python3 python3-venv python3-pip git tesseract-ocr tesseract-ocr-rus tesseract-ocr-eng
+```
+
+Или можно установить системные зависимости из файла:
+
+```bash
+sudo apt update
+sudo xargs -a requirements-system.txt apt install -y
 ```
 
 ### 2. Склонировать проект
@@ -83,6 +91,8 @@ USE_LLM_TOPICS=false
 LLM_BACKEND=llama_cpp
 LLM_MODEL=local-model
 LLM_ENDPOINT=http://127.0.0.1:8080/v1/chat/completions
+LLM_CHAT_MODEL=local-model
+LLM_CHAT_ENDPOINT=http://127.0.0.1:8080/v1/chat/completions
 LLM_TIMEOUT=10
 ```
 
@@ -90,6 +100,8 @@ LLM_TIMEOUT=10
 - `USE_LLM_TOPICS=false`: всегда используется текущая rule-based логика из `app/topics.py`.
 - `USE_LLM_TOPICS=true`: сначала пробуем LLM для блоков "Основные темы" и "Характер обсуждения".
 - Если LLM недоступна/ошиблась/вернула невалидный JSON: автоматически включается fallback на rule-based без падения бота.
+- `LLM_ENDPOINT`/`LLM_MODEL`: основная модель, которая сначала генерирует ответ для `/ask` и reply к боту.
+- `LLM_CHAT_ENDPOINT`/`LLM_CHAT_MODEL`: опциональный второй этап "редактора" для чатовых ответов. Если отличаются от основных — бот отправляет сырой ответ в эту модель и просит переписать его в нормальный чатовый формат.
 
 ## Команды бота
 
