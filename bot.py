@@ -628,6 +628,7 @@ async def main() -> None:
 
     @router.message(Command("stats"))
     async def on_stats(message: Message) -> None:
+        logger.error("CHAT ID DETECTED: %s", message.chat.id)
         if message.chat.id != settings.allowed_chat_id:
             return
         await _safe_delete_command_message(bot, message)
