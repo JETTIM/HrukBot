@@ -684,8 +684,8 @@ async def main() -> None:
                 short_memory=short_memory,
             ),
             backend=settings.llm_backend,
-            model=settings.llm_model,
-            endpoint=settings.llm_endpoint,
+            model=settings.llm_chat_model,
+            endpoint=settings.llm_chat_endpoint,
             timeout=settings.llm_timeout,
         )
         if answer is None:
@@ -867,8 +867,8 @@ async def main() -> None:
                 answer = try_answer_question(
                     _build_question_with_context(question, visual_context, reply_text_context, short_memory),
                     backend=settings.llm_backend,
-                    model=settings.llm_model,
-                    endpoint=settings.llm_endpoint,
+                    model=settings.llm_chat_model,
+                    endpoint=settings.llm_chat_endpoint,
                     timeout=settings.llm_timeout,
                 )
                 if answer is not None:
