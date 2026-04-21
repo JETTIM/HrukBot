@@ -348,6 +348,40 @@ def try_rewrite_assistant_answer(
     )
 
 
+def try_prepare_visual_task(
+    question: str,
+    *,
+    backend: str,
+    model: str,
+    endpoint: str,
+    timeout: float,
+) -> str | None:
+    question = question.strip()
+    if not question:
+        return None
+
+    return _try_generate_plain_text(
+        backend=backend,
+        model=model,
+        endpoint=endpoint,
+        timeout=timeout,
+        system_prompt=(
+            "Ты помогаешь подготовить короткую задачу для другой модели, которая ответит по OCR и подписи картинки. "
+            "Переформулируй вопрос пользователя в 1-2 короткие инструкции на русском. "
+            "Нужно понять, хочет ли пользователь: прочитать текст, кратко описать картинку, объяснить шутку, "
+            "или просто дать комментарий. Без markdown."
+        ),
+        user_prompt=(
+            "Вопрос пользователя про картинку:\n"
+            f"{question[:600]}\n\n"
+            "Верни только краткую задачу для модели-исполнителя."
+        ),
+        temperature=0.15,
+        max_tokens=120,
+        max_chars=300,
+    )
+
+
 def try_generate_image_cluster_summary(
     context_lines: Sequence[str],
     *,

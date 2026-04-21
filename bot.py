@@ -40,6 +40,7 @@ from app.llm_topics import (
     try_generate_roast,
     try_generate_svin_comment,
     try_generate_svin_joke,
+    try_prepare_visual_task,
     try_rewrite_assistant_answer,
 )
 from app.report import activity_by_hour, calculate_daily_stats, format_daily_report
@@ -163,10 +164,18 @@ def _reply_has_visual_file(message: Message) -> bool:
     return bool(message.reply_to_message and get_image_file_id(message.reply_to_message))
 
 
+def _message_has_visual_file(message: Message) -> bool:
+    if not ENABLE_VISUAL_FEATURES:
+        return False
+    return get_image_file_id(message) is not None
+
+
 def _extract_question_or_visual_default(message: Message) -> str:
     question = _extract_command_args(message)
     if question.strip():
         return question
+    if _message_has_visual_file(message):
+        return "что на картинке?"
     if _reply_has_visual_file(message):
         return "что на картинке?"
     return ""
@@ -260,6 +269,41 @@ def _build_reply_visual_context(message: Message) -> str | None:
     return "\n".join(parts) if parts else "Картинка знакома, но осмысленного описания пока нет."
 
 
+def _build_message_visual_context(message: Message) -> str | None:
+    if not ENABLE_VISUAL_FEATURES:
+        return None
+    event = get_image_event_by_message(chat_id=message.chat.id, message_id=message.message_id)
+    if not event:
+        return None
+
+    status = str(event.get("processing_status") or "")
+    if status != "processed":
+        return "Визуальный контекст этой картинки пока не обработан."
+
+    parts: list[str] = []
+    cluster_id = event.get("cluster_id")
+    cluster_summary = str(event.get("cluster_summary") or "").strip()
+    summary_text = str(event.get("summary_text") or "").strip()
+    ocr_text = str(event.get("ocr_text") or "").strip()
+    context_text = str(event.get("context_text") or "").strip()
+    usage_count = event.get("usage_count")
+
+    if cluster_id:
+        parts.append(f"visual cluster #{cluster_id}")
+    if usage_count:
+        parts.append(f"повторов в памяти: {usage_count}")
+    if cluster_summary:
+        parts.append(f"описание кластера: {cluster_summary}")
+    if summary_text and summary_text != cluster_summary:
+        parts.append(f"OCR/label: {summary_text}")
+    if ocr_text:
+        parts.append(f"OCR текст: {' '.join(ocr_text.split())[:500]}")
+    if context_text:
+        parts.append(f"caption/context: {context_text[:500]}")
+
+    return "\n".join(parts) if parts else "Картинка знакома, но осмысленного описания пока нет."
+
+
 async def _wait_for_reply_visual_context(message: Message) -> str | None:
     if not ENABLE_VISUAL_FEATURES:
         return None
@@ -270,6 +314,23 @@ async def _wait_for_reply_visual_context(message: Message) -> str | None:
     deadline = time.monotonic() + VISUAL_CONTEXT_WAIT_SECONDS
     while True:
         visual_context = _build_reply_visual_context(message)
+        if visual_context is not None:
+            return visual_context
+        if time.monotonic() >= deadline:
+            return None
+        await asyncio.sleep(VISUAL_CONTEXT_POLL_SECONDS)
+
+
+async def _wait_for_message_visual_context(message: Message, settings: object) -> str | None:
+    if not ENABLE_VISUAL_FEATURES:
+        return None
+    if not _message_has_visual_file(message):
+        return _build_message_visual_context(message)
+
+    await _ensure_message_visual_processing(message, settings)
+    deadline = time.monotonic() + VISUAL_CONTEXT_WAIT_SECONDS
+    while True:
+        visual_context = _build_message_visual_context(message)
         if visual_context is not None:
             return visual_context
         if time.monotonic() >= deadline:
@@ -297,6 +358,25 @@ async def _ensure_reply_visual_processing(message: Message) -> bool:
         message.message_id,
     )
     asyncio.create_task(_process_message_image_limited(message.bot, reply, settings=get_settings()))
+    return True
+
+
+async def _ensure_message_visual_processing(message: Message, settings: object) -> bool:
+    if not ENABLE_VISUAL_FEATURES:
+        return False
+    if get_image_file_id(message) is None:
+        return False
+
+    existing_event = get_image_event_by_message(chat_id=message.chat.id, message_id=message.message_id)
+    if existing_event is not None:
+        return False
+
+    logger.info(
+        "Scheduling visual processing from command message: chat_id=%s message_id=%s",
+        message.chat.id,
+        message.message_id,
+    )
+    asyncio.create_task(_process_message_image_limited(message.bot, message, settings=settings))
     return True
 
 
@@ -349,6 +429,70 @@ def _format_reply_visual_status(message: Message) -> str:
         lines.append(f"— обработан: {processed_at}")
 
     return "\n".join(lines)
+
+
+async def _wait_and_refresh_visual_status(
+    pending_message: Message,
+    started_at: float,
+    source_message: Message,
+    *,
+    initial_text: str,
+) -> None:
+    await _finish_pending(pending_message, started_at, escape(initial_text))
+
+    deadline = time.monotonic() + VISUAL_CONTEXT_WAIT_SECONDS
+    while time.monotonic() < deadline:
+        await asyncio.sleep(VISUAL_CONTEXT_POLL_SECONDS)
+        status_text = _format_reply_visual_status(source_message)
+        if "изучен" in status_text or "не удалась" in status_text:
+            try:
+                await pending_message.edit_text(escape(status_text))
+            except Exception:
+                return
+            return
+    try:
+        await pending_message.edit_text(
+            escape(
+                "Ладно, спроси позже, я устала.\n"
+                "Обработка картинки что-то затянулась."
+            )
+        )
+    except Exception:
+        return
+
+
+async def _get_visual_context_for_ask(message: Message, settings: object) -> str | None:
+    if _message_has_visual_file(message):
+        return await _wait_for_message_visual_context(message, settings)
+    if _reply_has_visual_file(message):
+        return await _wait_for_reply_visual_context(message)
+    return None
+
+
+def _build_visual_task_question(question: str, visual_context: str | None, settings: object) -> str:
+    if not visual_context:
+        return question
+
+    rewrite_model = str(getattr(settings, "llm_chat_model", "") or "").strip()
+    rewrite_endpoint = str(getattr(settings, "llm_chat_endpoint", "") or "").strip()
+    primary_model = str(getattr(settings, "llm_model", "") or "").strip()
+    primary_endpoint = str(getattr(settings, "llm_endpoint", "") or "").strip()
+    if not rewrite_model or not rewrite_endpoint:
+        return question
+    if rewrite_model == primary_model and rewrite_endpoint == primary_endpoint:
+        return question
+
+    rewritten = try_prepare_visual_task(
+        question,
+        backend=getattr(settings, "llm_backend", "llama_cpp"),
+        model=rewrite_model,
+        endpoint=rewrite_endpoint,
+        timeout=float(getattr(settings, "llm_timeout", 10.0)),
+    )
+    if rewritten:
+        logger.info("Visual ask task rewritten by chat model: original=%r rewritten=%r", question[:200], rewritten[:200])
+        return rewritten
+    return question
 
 
 def _format_visual_processing_stage(status: str) -> str:
@@ -407,6 +551,7 @@ def _build_question_with_context(
 ) -> str:
     question = _inject_question_hints(question)
     text_extraction_question = _looks_like_text_extraction_question(question)
+    image_comment_question = _looks_like_image_comment_question(question)
     if not visual_context and not reply_text_context and not short_memory:
         return question
     parts = [
@@ -420,6 +565,12 @@ def _build_question_with_context(
             "Пользователь хочет прочитать текст с reply-картинки. "
             "Опирайся только на OCR/label/caption из визуального контекста ниже. "
             "Не используй короткую память чата, если она не относится к изображению."
+        )
+    elif visual_context and image_comment_question:
+        parts.append(
+            "Пользователь просит кратко объяснить или прокомментировать картинку. "
+            "Дай короткий человеческий комментарий по смыслу изображения. "
+            "Можно с лёгкой иронией, но без выдумывания деталей, которых нет в OCR/label/caption."
         )
     elif short_memory:
         parts.append(
@@ -453,6 +604,33 @@ def _looks_like_text_extraction_question(question: str) -> bool:
         "текст на картинке",
     )
     return any(marker in lowered for marker in markers)
+
+
+def _looks_like_image_comment_question(question: str) -> bool:
+    lowered = " ".join(question.lower().split())
+    markers = (
+        "что тут",
+        "что это",
+        "что за",
+        "что тут за",
+        "чо тут",
+        "чо это",
+        "что на картинке",
+        "что на фото",
+        "что изображено",
+        "что нарисовано",
+        "что за мем",
+        "в чем прикол",
+        "в чём прикол",
+        "прикол в чем",
+        "объясни мем",
+        "объясни картинку",
+        "прокомментируй",
+        "комментани",
+        "что сказать",
+        "что происходит",
+    )
+    return any(marker in lowered for marker in markers) and not _looks_like_text_extraction_question(question)
 
 
 def _inject_question_hints(question: str) -> str:
@@ -915,17 +1093,18 @@ async def main() -> None:
             await message.answer("LLM сейчас выключена.", disable_notification=True)
             return
 
-        visual_context = await _wait_for_reply_visual_context(message)
-        if _reply_has_visual_file(message) and visual_context is None:
+        visual_context = await _get_visual_context_for_ask(message, settings)
+        if (_reply_has_visual_file(message) or _message_has_visual_file(message)) and visual_context is None:
             await message.answer("Визуальный контекст этой картинки ещё не готов.", disable_notification=True)
             return
 
         pending_message, pending_started = await _send_pending(message)
         short_memory = _build_short_chat_memory(message.chat.id, message.message_id)
         normalized_question = _normalize_reply_question(question, reply_text_context)
+        llm_question = _build_visual_task_question(normalized_question, visual_context, settings)
         answer = try_answer_question(
             _build_question_with_context(
-                normalized_question,
+                llm_question,
                 visual_context,
                 reply_text_context=reply_text_context,
                 short_memory=short_memory,
@@ -969,9 +1148,16 @@ async def main() -> None:
         if scheduled:
             status_text = (
                 "Запустила обработку reply-картинки.\n"
-                "Проверь /seen ещё раз через пару секунд.\n\n"
+                "Сейчас сама обновлю статус, если обработка успеет закончиться.\n\n"
                 f"{status_text}"
             )
+            await _wait_and_refresh_visual_status(
+                pending_message,
+                pending_started,
+                message,
+                initial_text=status_text,
+            )
+            return
         await _finish_pending(pending_message, pending_started, escape(status_text))
 
     @router.message(Command("chance"))
