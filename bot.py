@@ -3,6 +3,7 @@
 import asyncio
 import logging
 import random
+import re
 import time
 from datetime import date, timedelta
 from html import escape
@@ -39,6 +40,7 @@ from app.llm_topics import (
     try_generate_roast,
     try_generate_svin_comment,
     try_generate_svin_joke,
+    try_rewrite_assistant_answer,
 )
 from app.report import activity_by_hour, calculate_daily_stats, format_daily_report
 from daily_report import build_topics_and_summary_lines, build_user_names
@@ -118,9 +120,10 @@ def _should_try_svin_reply(today_messages_count: int) -> bool:
 
 
 def _extract_command_args(message: Message) -> str:
-    if not message.text:
+    raw_text = message.text or message.caption
+    if not raw_text:
         return ""
-    text = message.text.strip()
+    text = raw_text.strip()
     parts = text.split(maxsplit=1)
     if not parts:
         return ""
@@ -382,6 +385,58 @@ def _normalize_llm_text_block(text: str, max_lines: int = 3) -> str:
     return "\n".join(lines) if lines else text.strip()
 
 
+def _maybe_rewrite_chat_answer(answer: str, settings: object) -> str:
+    primary_endpoint = str(getattr(settings, "llm_endpoint", "") or "").strip()
+    primary_model = str(getattr(settings, "llm_model", "") or "").strip()
+    rewrite_endpoint = str(getattr(settings, "llm_chat_endpoint", "") or "").strip()
+    rewrite_model = str(getattr(settings, "llm_chat_model", "") or "").strip()
+
+    if not rewrite_endpoint or not rewrite_model:
+        logger.info("LLM chat rewrite skipped: rewrite endpoint/model is empty")
+        return answer
+    if rewrite_endpoint == primary_endpoint and rewrite_model == primary_model:
+        logger.info("LLM chat rewrite skipped: rewrite model matches primary model")
+        return answer
+
+    logger.info(
+        "LLM chat rewrite attempt: primary_model=%s primary_endpoint=%s rewrite_model=%s rewrite_endpoint=%s",
+        primary_model,
+        primary_endpoint,
+        rewrite_model,
+        rewrite_endpoint,
+    )
+    rewritten = try_rewrite_assistant_answer(
+        answer,
+        backend=getattr(settings, "llm_backend", "llama_cpp"),
+        model=rewrite_model,
+        endpoint=rewrite_endpoint,
+        timeout=float(getattr(settings, "llm_timeout", 10.0)),
+    )
+    if rewritten:
+        logger.info("LLM chat rewrite applied successfully")
+        return rewritten
+    logger.info("LLM chat rewrite failed, using primary answer")
+    return answer
+
+
+def _sanitize_chat_answer(text: str) -> str:
+    cleaned_lines: list[str] = []
+    for raw in text.replace("\r", "\n").split("\n"):
+        line = raw.strip()
+        if not line:
+            continue
+        line = line.replace("**", "").replace("__", "").replace("`", "").strip()
+        if re.match(r"^\*?\s*attempt\s*\*?$", line, flags=re.IGNORECASE):
+            continue
+        line = re.sub(r"^\s*(input message|message|context)\s*:\s*", "", line, flags=re.IGNORECASE)
+        if line:
+            cleaned_lines.append(line)
+
+    if not cleaned_lines:
+        return text.strip()
+    return "\n".join(cleaned_lines)
+
+
 async def _safe_delete_command_message(bot: Bot, message: Message) -> None:
     text = (message.text or "").strip()
     if not text.startswith("/"):
@@ -451,13 +506,15 @@ async def main() -> None:
     )
     bot_info = await bot.get_me()
     logger.info(
-        "Bot runtime config: username=@%s id=%s use_llm_topics=%s enable_image_processing=%s visual_features=%s image_pipeline_available=%s",
+        "Bot runtime config: username=@%s id=%s use_llm_topics=%s enable_image_processing=%s visual_features=%s image_pipeline_available=%s llm_endpoint=%s llm_chat_endpoint=%s",
         bot_info.username,
         bot_info.id,
         settings.use_llm_topics,
         settings.enable_image_processing,
         ENABLE_VISUAL_FEATURES,
         IMAGE_PIPELINE_AVAILABLE,
+        settings.llm_endpoint,
+        settings.llm_chat_endpoint,
     )
     dp = Dispatcher()
     router = Router()
@@ -635,7 +692,8 @@ async def main() -> None:
         if answer is None:
             await _finish_pending(pending_message, pending_started, "Не смогла получить ответ от LLM.")
             return
-        await _finish_pending(pending_message, pending_started, escape(answer))
+        answer = _maybe_rewrite_chat_answer(answer, settings)
+        await _finish_pending(pending_message, pending_started, escape(_sanitize_chat_answer(answer)))
 
     @router.message(Command("visual"))
     async def on_visual(message: Message) -> None:
@@ -694,6 +752,29 @@ async def main() -> None:
             disable_notification=True,
         )
 
+    @router.message(Command("llmroute"))
+    async def on_llmroute(message: Message) -> None:
+        if message.chat.id != settings.allowed_chat_id:
+            return
+        await _safe_delete_command_message(bot, message)
+
+        primary = f"{settings.llm_model or '-'} @ {settings.llm_endpoint or '-'}"
+        rewrite = f"{settings.llm_chat_model or '-'} @ {settings.llm_chat_endpoint or '-'}"
+        rewrite_enabled = (
+            bool(settings.llm_chat_model and settings.llm_chat_endpoint)
+            and not (
+                settings.llm_chat_model == settings.llm_model
+                and settings.llm_chat_endpoint == settings.llm_endpoint
+            )
+        )
+        text = (
+            "🧠 Текущий LLM маршрут:\n"
+            f"• primary: {primary}\n"
+            f"• rewrite: {rewrite}\n"
+            f"• rewrite_enabled: {'yes' if rewrite_enabled else 'no'}"
+        )
+        await message.answer(escape(text), disable_notification=True)
+
     @router.message(Command("roast"))
     async def on_roast(message: Message) -> None:
         if message.chat.id != settings.allowed_chat_id:
@@ -736,6 +817,7 @@ async def main() -> None:
             "/visual",
             "/seen",
             "/chance",
+            "/llmroute",
             "/roast",
         )):
             return
@@ -815,7 +897,8 @@ async def main() -> None:
                     timeout=settings.llm_timeout,
                 )
                 if answer is not None:
-                    await _finish_pending(pending_message, pending_started, escape(answer))
+                    answer = _maybe_rewrite_chat_answer(answer, settings)
+                    await _finish_pending(pending_message, pending_started, escape(_sanitize_chat_answer(answer)))
                     return
                 await _finish_pending(pending_message, pending_started, "Не смогла получить ответ от LLM.")
                 return
