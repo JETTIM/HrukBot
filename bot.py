@@ -451,13 +451,14 @@ async def main() -> None:
     )
     bot_info = await bot.get_me()
     logger.info(
-        "Bot runtime config: username=@%s id=%s use_llm_topics=%s enable_image_processing=%s visual_features=%s image_pipeline_available=%s",
+        "Bot runtime config: username=@%s id=%s use_llm_topics=%s enable_image_processing=%s visual_features=%s image_pipeline_available=%s llm_chat_endpoint=%s",
         bot_info.username,
         bot_info.id,
         settings.use_llm_topics,
         settings.enable_image_processing,
         ENABLE_VISUAL_FEATURES,
         IMAGE_PIPELINE_AVAILABLE,
+        settings.llm_chat_endpoint,
     )
     dp = Dispatcher()
     router = Router()
@@ -628,8 +629,8 @@ async def main() -> None:
                 short_memory=short_memory,
             ),
             backend=settings.llm_backend,
-            model=settings.llm_model,
-            endpoint=settings.llm_endpoint,
+            model=settings.llm_chat_model,
+            endpoint=settings.llm_chat_endpoint,
             timeout=settings.llm_timeout,
         )
         if answer is None:
@@ -810,8 +811,8 @@ async def main() -> None:
                 answer = try_answer_question(
                     _build_question_with_context(question, visual_context, reply_text_context, short_memory),
                     backend=settings.llm_backend,
-                    model=settings.llm_model,
-                    endpoint=settings.llm_endpoint,
+                    model=settings.llm_chat_model,
+                    endpoint=settings.llm_chat_endpoint,
                     timeout=settings.llm_timeout,
                 )
                 if answer is not None:
