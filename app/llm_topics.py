@@ -2,6 +2,7 @@
 
 import json
 import logging
+import re
 from collections.abc import Sequence
 from typing import Any
 from urllib.error import HTTPError, URLError
@@ -359,6 +360,7 @@ def _try_generate_plain_text(
 
 def _clean_plain_text(text: str, *, max_chars: int) -> str | None:
     cleaned = _strip_markdown_fence(text).strip().strip('"')
+    cleaned = _sanitize_reasoning_output(cleaned)
     if not cleaned:
         return None
     return cleaned[:max_chars]
@@ -387,10 +389,85 @@ def _call_llama_cpp(*, endpoint: str, payload: dict[str, Any], timeout: float) -
         raise ValueError("No choices in LLM response")
 
     message = choices[0].get("message") or {}
-    content = message.get("content")
-    if not isinstance(content, str) or not content.strip():
+    text = _extract_message_text(message)
+    if text is None:
         raise ValueError("Empty content in LLM response")
-    return content.strip()
+    return text
+
+
+def _extract_message_text(message: dict[str, Any]) -> str | None:
+    content = message.get("content")
+    if not isinstance(content, str):
+        return None
+    text = content.strip()
+    if not text:
+        return None
+    return text
+
+
+def _looks_like_reasoning_text(text: str) -> bool:
+    lowered = text.strip().lstrip("\"'“”`").lower()
+    reasoning_prefixes = (
+        "thinking process",
+        "reasoning:",
+        "chain of thought",
+        "analysis:",
+        "<think>",
+    )
+    return lowered.startswith(reasoning_prefixes)
+
+
+def _sanitize_reasoning_output(text: str) -> str:
+    if not text:
+        return text
+
+    stripped = text.strip().strip('"')
+    if not _looks_like_reasoning_text(stripped):
+        return stripped
+
+    option = _extract_best_draft_option(stripped)
+    if option:
+        return option
+
+    lines: list[str] = []
+    for raw in stripped.splitlines():
+        line = raw.strip().strip('"')
+        if not line:
+            continue
+        lowered = line.lower()
+        if _looks_like_reasoning_text(line):
+            continue
+        if lowered.startswith("draft response options"):
+            continue
+        if re.match(r"^\d+\.\s", line):
+            continue
+        if line.startswith(("*", "-", "•")):
+            continue
+        lines.append(line)
+
+    return lines[-1] if lines else ""
+
+
+def _extract_best_draft_option(text: str) -> str | None:
+    options: list[str] = []
+    for raw in text.splitlines():
+        line = raw.strip().strip('"')
+        if not line:
+            continue
+        if not line.startswith(("*", "-", "•")):
+            continue
+        value = line[1:].strip()
+        value = re.sub(r"\s*\([^)]*\)\s*$", "", value).strip()
+        if len(value) < 4:
+            continue
+        if _looks_like_reasoning_text(value):
+            continue
+        if not any(ch.isalpha() for ch in value):
+            continue
+        options.append(value)
+    if not options:
+        return None
+    return min(options, key=len)
 
 
 def _parse_response_json(raw_content: str) -> tuple[list[str], list[str]] | None:
