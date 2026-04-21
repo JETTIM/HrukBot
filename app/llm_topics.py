@@ -83,6 +83,9 @@ def try_extract_topics_and_summary(
         except (URLError, TimeoutError, OSError, ValueError, json.JSONDecodeError):
             logger.exception("LLM topics retry failed")
             return None
+    except (URLError, TimeoutError, OSError, ValueError, json.JSONDecodeError):
+        logger.exception("LLM topics request failed")
+        return None
 
     try:
         parsed = _parse_response_json(raw_content)

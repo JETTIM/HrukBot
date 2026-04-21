@@ -652,36 +652,44 @@ async def main() -> None:
 
     @router.message(Command("stats"))
     async def on_stats(message: Message) -> None:
-    
         if message.chat.id != settings.allowed_chat_id:
             return
+        _log_incoming_command(message)
         await _safe_delete_command_message(bot, message)
 
         pending_message, pending_started = await _send_pending(message)
-        today = date.today()
-        messages = _get_chat_messages_by_day(today, settings.allowed_chat_id)
-        user_names = build_user_names(messages)
+        try:
+            today = date.today()
+            messages = _get_chat_messages_by_day(today, settings.allowed_chat_id)
+            user_names = build_user_names(messages)
 
-        stats = calculate_daily_stats(messages)
-        topics, character, used_llm_topics = build_topics_and_summary_lines(
-            messages=messages,
-            stats=stats,
-            user_names=user_names,
-            settings=settings,
-            return_meta=True,
-        )
+            stats = calculate_daily_stats(messages)
+            topics, character, used_llm_topics = build_topics_and_summary_lines(
+                messages=messages,
+                stats=stats,
+                user_names=user_names,
+                settings=settings,
+                return_meta=True,
+            )
 
-        report_text = format_daily_report(
-            report_date=today,
-            stats=stats,
-            topics=topics,
-            character_phrases=character,
-            user_names=user_names,
-            title_prefix="📊 На данный момент за",
-        )
-        if settings.use_llm_topics and stats.total_messages > 0 and not used_llm_topics:
-            report_text = f"{report_text}\n\nпу-пу-пу технические шоколадки"
-        await _finish_pending(pending_message, pending_started, report_text)
+            report_text = format_daily_report(
+                report_date=today,
+                stats=stats,
+                topics=topics,
+                character_phrases=character,
+                user_names=user_names,
+                title_prefix="📊 На данный момент за",
+            )
+            if settings.use_llm_topics and stats.total_messages > 0 and not used_llm_topics:
+                report_text = f"{report_text}\n\nпу-пу-пу технические шоколадки"
+            await _finish_pending(pending_message, pending_started, report_text)
+        except Exception:
+            logger.exception("Failed to build /stats response")
+            await _finish_pending(
+                pending_message,
+                pending_started,
+                "Не смогла собрать /stats, используй ещё раз через пару секунд.",
+            )
 
     @router.message(Command("dead"))
     async def on_dead(message: Message) -> None:
