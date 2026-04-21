@@ -3,6 +3,7 @@
 import asyncio
 import logging
 import random
+import re
 import time
 from datetime import date, timedelta
 from html import escape
@@ -390,10 +391,19 @@ def _maybe_rewrite_chat_answer(answer: str, settings: object) -> str:
     rewrite_model = str(getattr(settings, "llm_chat_model", "") or "").strip()
 
     if not rewrite_endpoint or not rewrite_model:
+        logger.info("LLM chat rewrite skipped: rewrite endpoint/model is empty")
         return answer
     if rewrite_endpoint == primary_endpoint and rewrite_model == primary_model:
+        logger.info("LLM chat rewrite skipped: rewrite model matches primary model")
         return answer
 
+    logger.info(
+        "LLM chat rewrite attempt: primary_model=%s primary_endpoint=%s rewrite_model=%s rewrite_endpoint=%s",
+        primary_model,
+        primary_endpoint,
+        rewrite_model,
+        rewrite_endpoint,
+    )
     rewritten = try_rewrite_assistant_answer(
         answer,
         backend=getattr(settings, "llm_backend", "llama_cpp"),
@@ -401,7 +411,29 @@ def _maybe_rewrite_chat_answer(answer: str, settings: object) -> str:
         endpoint=rewrite_endpoint,
         timeout=float(getattr(settings, "llm_timeout", 10.0)),
     )
-    return rewritten or answer
+    if rewritten:
+        logger.info("LLM chat rewrite applied successfully")
+        return rewritten
+    logger.info("LLM chat rewrite failed, using primary answer")
+    return answer
+
+
+def _sanitize_chat_answer(text: str) -> str:
+    cleaned_lines: list[str] = []
+    for raw in text.replace("\r", "\n").split("\n"):
+        line = raw.strip()
+        if not line:
+            continue
+        line = line.replace("**", "").replace("__", "").replace("`", "").strip()
+        if re.match(r"^\*?\s*attempt\s*\*?$", line, flags=re.IGNORECASE):
+            continue
+        line = re.sub(r"^\s*(input message|message|context)\s*:\s*", "", line, flags=re.IGNORECASE)
+        if line:
+            cleaned_lines.append(line)
+
+    if not cleaned_lines:
+        return text.strip()
+    return "\n".join(cleaned_lines)
 
 
 async def _safe_delete_command_message(bot: Bot, message: Message) -> None:
@@ -660,7 +692,7 @@ async def main() -> None:
             await _finish_pending(pending_message, pending_started, "Не смогла получить ответ от LLM.")
             return
         answer = _maybe_rewrite_chat_answer(answer, settings)
-        await _finish_pending(pending_message, pending_started, escape(answer))
+        await _finish_pending(pending_message, pending_started, escape(_sanitize_chat_answer(answer)))
 
     @router.message(Command("visual"))
     async def on_visual(message: Message) -> None:
@@ -841,7 +873,7 @@ async def main() -> None:
                 )
                 if answer is not None:
                     answer = _maybe_rewrite_chat_answer(answer, settings)
-                    await _finish_pending(pending_message, pending_started, escape(answer))
+                    await _finish_pending(pending_message, pending_started, escape(_sanitize_chat_answer(answer)))
                     return
                 await _finish_pending(pending_message, pending_started, "Не смогла получить ответ от LLM.")
                 return
