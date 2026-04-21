@@ -433,8 +433,9 @@ def _format_visual_memory(limit: int = 8) -> str:
 
 
 async def main() -> None:
-    global _image_processing_semaphore
+    global _image_processing_semaphore, ENABLE_VISUAL_FEATURES
     settings = get_settings()
+    ENABLE_VISUAL_FEATURES = IMAGE_PIPELINE_AVAILABLE and settings.enable_image_processing
 
     logging.basicConfig(
         level=getattr(logging, settings.log_level.upper(), logging.INFO),
@@ -843,4 +844,3 @@ async def main() -> None:
 
 if __name__ == "__main__":
     asyncio.run(main())
-
