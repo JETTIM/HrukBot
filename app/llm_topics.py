@@ -14,6 +14,8 @@ MAX_MESSAGES = 500
 MAX_INPUT_CHARS = 3500
 MIN_INPUT_CHARS = 700
 MIN_MAX_TOKENS = 48
+TOPICS_INPUT_CHARS = 1200
+TOPICS_MESSAGE_CHARS = 90
 
 SYSTEM_PROMPT = (
     "Ты анализируешь переписку Telegram-чата.\n"
@@ -31,6 +33,13 @@ SYSTEM_PROMPT = (
     "- формулируй коротко и естественно."
 )
 
+TOPICS_SYSTEM_PROMPT = (
+    "Проанализируй чат. "
+    "Ответь только JSON вида "
+    '{"topics":["..."],"summary_lines":["..."]}. '
+    "Пиши кратко по-русски."
+)
+
 
 def try_extract_topics_and_summary(
     messages: Sequence[str],
@@ -44,21 +53,21 @@ def try_extract_topics_and_summary(
         logger.warning("Unsupported LLM backend: %s", backend)
         return None
 
-    prompt_input = _build_corpus(messages)
+    prompt_input = _build_topics_corpus(messages)
     if not prompt_input:
         return None
 
     payload = {
         "model": model,
         "messages": [
-            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "system", "content": TOPICS_SYSTEM_PROMPT},
             {
                 "role": "user",
                 "content": _build_topics_user_prompt(prompt_input),
             },
         ],
         "temperature": 0.3,
-        "max_tokens": 700,
+        "max_tokens": 160,
     }
 
     try:
@@ -407,12 +416,34 @@ def _read_http_error(exc: HTTPError) -> str:
 
 def _build_topics_user_prompt(prompt_input: str) -> str:
     return (
-        "Ниже сообщения Telegram-чата за день.\n"
-        "Нужно выделить 2-5 основных тем и 1-2 фразы для блока 'Характер обсуждения'.\n"
-        "Ответ верни строго JSON с полями topics и summary_lines.\n\n"
+        "Выдели 2-4 темы и 1-2 короткие фразы о характере обсуждения.\n"
+        "Не выдумывай лишнего.\n"
         "Сообщения:\n"
         f"{prompt_input}"
     )
+
+
+def _build_topics_corpus(messages: Sequence[str]) -> str:
+    chunks: list[str] = []
+    total_chars = 0
+
+    for raw in messages[-MAX_MESSAGES:]:
+        value = " ".join(raw.split()).strip()
+        if not value:
+            continue
+        value = value[:TOPICS_MESSAGE_CHARS]
+        line = f"- {value}"
+        add_len = len(line) + (1 if chunks else 0)
+        if total_chars + add_len > TOPICS_INPUT_CHARS:
+            remain = TOPICS_INPUT_CHARS - total_chars
+            if remain <= 4:
+                break
+            chunks.append(line[:remain].rstrip())
+            break
+        chunks.append(line)
+        total_chars += add_len
+
+    return "\n".join(chunks)
 
 
 def _call_llama_cpp_with_retries(*, endpoint: str, payload: dict[str, Any], timeout: float) -> str:
