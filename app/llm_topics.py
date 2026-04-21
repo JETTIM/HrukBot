@@ -445,6 +445,14 @@ def _extract_message_text(message: dict[str, Any]) -> str | None:
         if normalized_text_field:
             return normalized_text_field
 
+    reasoning_content = message.get("reasoning_content")
+    if isinstance(reasoning_content, str):
+        stripped_reasoning = reasoning_content.strip()
+        if _looks_like_reasoning_text(stripped_reasoning):
+            normalized_reasoning = _sanitize_reasoning_output(stripped_reasoning)
+            if normalized_reasoning:
+                return normalized_reasoning
+
     return None
 
 

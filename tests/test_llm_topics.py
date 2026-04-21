@@ -60,6 +60,14 @@ def test_extract_choice_text_prefers_message_content_when_reasoning_content_pres
     assert _extract_choice_text(choice) == "Я не сплю. Всегда готов помочь!"
 
 
+def test_extract_message_text_falls_back_to_reasoning_content() -> None:
+    message = {
+        "content": "   ",
+        "reasoning_content": "Thinking Process:\nDraft response options:\n* первый\n* второй",
+    }
+    assert _extract_message_text(message) == "первый"
+
+
 def test_clean_plain_text_extracts_best_draft_option() -> None:
     raw = (
         "Thinking Process:\n\n"

@@ -45,6 +45,17 @@ except ImportError:
 _ocr_binary_missing_logged = False
 
 
+def _is_tesseract_missing_error(exc: Exception) -> bool:
+    if TesseractNotFoundError is not None and isinstance(exc, TesseractNotFoundError):
+        return True
+    if isinstance(exc, FileNotFoundError):
+        return str(getattr(exc, "filename", "") or "").endswith("tesseract")
+    if exc.__class__.__name__ == "TesseractNotFoundError":
+        return True
+    cause = exc.__cause__ or exc.__context__
+    return isinstance(cause, Exception) and _is_tesseract_missing_error(cause)
+
+
 def get_image_file_id(message: Message) -> str | None:
     info = get_visual_file_info(message)
     return info[0] if info else None
@@ -183,7 +194,7 @@ def extract_ocr_text(path: Path) -> str | None:
         with Image.open(path) as image:
             text = pytesseract.image_to_string(image, lang="rus+eng").strip()
     except Exception as exc:
-        if TesseractNotFoundError is not None and isinstance(exc, TesseractNotFoundError):
+        if _is_tesseract_missing_error(exc):
             if not _ocr_binary_missing_logged:
                 logger.warning("OCR disabled: tesseract binary not found in PATH")
                 _ocr_binary_missing_logged = True
