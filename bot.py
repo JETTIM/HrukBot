@@ -331,9 +331,8 @@ def _build_short_chat_memory(chat_id: int, current_message_id: int, limit: int =
 
     lines: list[str] = []
     for row in reversed(memory_rows):
-        name = str(row.get("full_name") or row.get("username") or "user").strip()
         text = " ".join(str(row.get("text") or "").split())
-        lines.append(f"{name}: {text[:300]}")
+        lines.append(f"Сообщение из чата: {text[:300]}")
     return "\n".join(lines)
 
 
@@ -343,11 +342,13 @@ def _build_question_with_context(
     reply_text_context: str | None = None,
     short_memory: str | None = None,
 ) -> str:
+    question = _inject_question_hints(question)
     if not visual_context and not reply_text_context and not short_memory:
         return question
     parts = [
         "Пользователь спрашивает в Telegram-чате.",
         "Ответь на русском, коротко и по делу.",
+        "Не обращайся к пользователю по имени, если он сам не представился в текущем сообщении.",
         f"Вопрос пользователя: {question}",
     ]
     if short_memory:
@@ -364,6 +365,13 @@ def _build_question_with_context(
             f"Визуальный контекст reply-сообщения:\n{visual_context}"
         )
     return "\n\n".join(parts)
+
+
+def _inject_question_hints(question: str) -> str:
+    normalized = " ".join(question.lower().split())
+    if "норвуд" in normalized and "шкал" not in normalized:
+        return f"{question}\n(Подсказка: вероятнее всего речь про шкалу Норвуда для стадий облысения.)"
+    return question
 
 
 def _normalize_llm_text_block(text: str, max_lines: int = 3) -> str:
