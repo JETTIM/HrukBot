@@ -286,6 +286,38 @@ def try_answer_question(
     )
 
 
+def try_rewrite_assistant_answer(
+    answer: str,
+    *,
+    backend: str,
+    model: str,
+    endpoint: str,
+    timeout: float,
+) -> str | None:
+    answer = answer.strip()
+    if not answer:
+        return None
+
+    return _try_generate_plain_text(
+        backend=backend,
+        model=model,
+        endpoint=endpoint,
+        timeout=timeout,
+        system_prompt=(
+            "Ты редактор ответов Telegram-бота. "
+            "Сохраняй смысл исходного ответа, но убирай мета-мусор вроде Attempt/Context. "
+            "Пиши естественно на русском, 1-3 коротких предложения, без markdown."
+        ),
+        user_prompt=(
+            "Перепиши ответ другой модели в нормальный чатовый формат.\n\n"
+            f"{answer[:1500]}"
+        ),
+        temperature=0.25,
+        max_tokens=220,
+        max_chars=900,
+    )
+
+
 def try_generate_image_cluster_summary(
     context_lines: Sequence[str],
     *,
