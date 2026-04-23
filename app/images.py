@@ -26,6 +26,7 @@ from app.db import (
     update_image_cluster_summary,
     update_image_event_failed,
     update_image_event_processed,
+    update_image_event_status,
 )
 from app.llm_topics import try_generate_image_cluster_summary
 
@@ -82,6 +83,14 @@ async def process_message_image(bot: Bot, message: Message, settings: object | N
 
     file_id, file_size = file_info
     context_text = extract_message_context(message)
+    logger.info(
+        "Image processing queued: chat_id=%s message_id=%s file_id=%s file_size=%s has_context=%s",
+        message.chat.id,
+        message.message_id,
+        file_id,
+        file_size,
+        bool(context_text),
+    )
     max_size_mb = float(getattr(settings, "max_image_file_size_mb", DEFAULT_MAX_IMAGE_FILE_SIZE_MB))
     if file_size is not None and file_size > int(max_size_mb * 1024 * 1024):
         event_id = create_image_event(
@@ -138,13 +147,26 @@ async def process_message_image(bot: Bot, message: Message, settings: object | N
             file_size=file_size,
             context_text=context_text,
         )
+        update_image_event_status(event_id=event_id, processing_status="queued")
+        logger.info("Image processing event created: event_id=%s message_id=%s", event_id, message.message_id)
 
+        update_image_event_status(event_id=event_id, processing_status="downloading")
         telegram_file = await bot.get_file(file_id)
         await bot.download_file(telegram_file.file_path, destination=local_path)
+        logger.info("Image download completed: event_id=%s local_path=%s", event_id, local_path)
 
+        update_image_event_status(event_id=event_id, processing_status="hashing")
         phash = calculate_phash(local_path)
+        update_image_event_status(event_id=event_id, processing_status="ocr")
         ocr_text = extract_ocr_text(local_path)
         summary_text = build_image_summary(ocr_text)
+        logger.info(
+            "Image OCR completed: event_id=%s has_ocr=%s summary_len=%s",
+            event_id,
+            bool(ocr_text),
+            len(summary_text) if summary_text else 0,
+        )
+        update_image_event_status(event_id=event_id, processing_status="clustering")
         cluster_id = find_or_create_cluster(
             phash=phash,
             summary_text=summary_text,
@@ -160,6 +182,12 @@ async def process_message_image(bot: Bot, message: Message, settings: object | N
             summary_text=summary_text,
             processed_at=datetime.utcnow(),
             file_deleted=file_deleted,
+        )
+        logger.info(
+            "Image processing finished: event_id=%s cluster_id=%s file_deleted=%s",
+            event_id,
+            cluster_id,
+            file_deleted,
         )
         maybe_update_cluster_summary(cluster_id=cluster_id, settings=settings)
     except Exception:

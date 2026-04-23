@@ -12,6 +12,13 @@ logger = logging.getLogger(__name__)
 
 MAX_MESSAGES = 500
 MAX_INPUT_CHARS = 3500
+MIN_INPUT_CHARS = 700
+MIN_MAX_TOKENS = 48
+TOPICS_INPUT_CHARS = 1200
+TOPICS_MESSAGE_CHARS = 90
+MOOD_INPUT_CHARS = 900
+MOOD_MESSAGE_CHARS = 80
+LLM_LOG_PREVIEW_CHARS = 280
 
 SYSTEM_PROMPT = (
     "Ты анализируешь переписку Telegram-чата.\n"
@@ -29,6 +36,13 @@ SYSTEM_PROMPT = (
     "- формулируй коротко и естественно."
 )
 
+TOPICS_SYSTEM_PROMPT = (
+    "Проанализируй чат. "
+    "Ответь только JSON вида "
+    '{"topics":["..."],"summary_lines":["..."]}. '
+    "Пиши кратко по-русски."
+)
+
 
 def try_extract_topics_and_summary(
     messages: Sequence[str],
@@ -42,31 +56,34 @@ def try_extract_topics_and_summary(
         logger.warning("Unsupported LLM backend: %s", backend)
         return None
 
-    prompt_input = _build_corpus(messages)
+    prompt_input = _build_topics_corpus(messages)
     if not prompt_input:
         return None
 
     payload = {
         "model": model,
         "messages": [
-            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "system", "content": TOPICS_SYSTEM_PROMPT},
             {
                 "role": "user",
-                "content": (
-                    "Ниже сообщения Telegram-чата за день.\n"
-                    "Нужно выделить 2-5 основных тем и 1-2 фразы для блока 'Характер обсуждения'.\n"
-                    "Ответ верни строго JSON с полями topics и summary_lines.\n\n"
-                    "Сообщения:\n"
-                    f"{prompt_input}"
-                ),
+                "content": _build_topics_user_prompt(prompt_input),
             },
         ],
         "temperature": 0.3,
-        "max_tokens": 700,
+        "max_tokens": 240,
     }
+    logger.info(
+        "LLM topics request: source_items=%s source_chars=%s prompt_chars=%s max_tokens=%s model=%s endpoint=%s",
+        len(messages),
+        sum(len(str(item)) for item in messages),
+        len(prompt_input),
+        payload.get("max_tokens"),
+        model,
+        endpoint,
+    )
 
     try:
-        raw_content = _call_llama_cpp(
+        raw_content = _call_llama_cpp_with_retries(
             endpoint=endpoint,
             payload={**payload, "response_format": {"type": "json_object"}},
             timeout=timeout,
@@ -80,13 +97,16 @@ def try_extract_topics_and_summary(
             _read_http_error(exc),
         )
         try:
-            raw_content = _call_llama_cpp(endpoint=endpoint, payload=payload, timeout=timeout)
+            raw_content = _call_llama_cpp_with_retries(endpoint=endpoint, payload=payload, timeout=timeout)
         except HTTPError as retry_exc:
             logger.exception("LLM topics retry failed: %s", _read_http_error(retry_exc))
             return None
         except (URLError, TimeoutError, OSError, ValueError, json.JSONDecodeError):
             logger.exception("LLM topics retry failed")
             return None
+    except (URLError, TimeoutError, OSError, ValueError, json.JSONDecodeError):
+        logger.exception("LLM topics request failed")
+        return None
 
     try:
         parsed = _parse_response_json(raw_content)
@@ -135,7 +155,7 @@ def try_generate_svin_joke(
             },
         ],
         "temperature": 0.55,
-        "max_tokens": 180,
+        "max_tokens": 260,
     }
 
     try:
@@ -158,9 +178,19 @@ def try_generate_mood_summary(
     endpoint: str,
     timeout: float,
 ) -> str | None:
-    prompt_input = _build_corpus(messages)
+    prompt_input = _build_mood_corpus(messages)
     if not prompt_input:
         return None
+
+    logger.info(
+        "LLM mood request: source_items=%s source_chars=%s prompt_chars=%s max_tokens=%s model=%s endpoint=%s",
+        len(messages),
+        sum(len(str(item)) for item in messages),
+        len(prompt_input),
+        220,
+        model,
+        endpoint,
+    )
 
     return _try_generate_plain_text(
         backend=backend,
@@ -168,19 +198,18 @@ def try_generate_mood_summary(
         endpoint=endpoint,
         timeout=timeout,
         system_prompt=(
-            "Ты кратко оцениваешь настроение и активность маленького Telegram-чата. "
-            "Пиши естественно на русском, без markdown."
+            "Оцени настроение и активность Telegram-чата. "
+            "Ответь по-русски очень кратко, 2-3 короткими строками, без markdown и без рассуждений."
         ),
         user_prompt=(
-            "Проанализируй сообщения чата за день.\n"
-            "Коротко оцени:\n"
+            "На основе краткой выжимки оцени:\n"
             "- уровень активности\n"
-            "- характер общения (обсуждение, троллинг, болтовня и т.д.)\n"
-            "Ответ 2-3 строками на русском.\n\n"
-            f"Сообщения:\n{prompt_input}"
+            "- характер общения\n"
+            "Верни только 2-3 короткие строки.\n\n"
+            f"{prompt_input}"
         ),
         temperature=0.45,
-        max_tokens=180,
+        max_tokens=220,
         max_chars=900,
     )
 
@@ -217,7 +246,7 @@ def try_generate_svin_comment(
             "Максимум 8 слов."
         ),
         temperature=0.85,
-        max_tokens=60,
+        max_tokens=100,
         max_chars=120,
     )
     if comment is None:
@@ -251,7 +280,7 @@ def try_generate_roast(
             "1-2 строки на русском, без markdown."
         ),
         temperature=0.9,
-        max_tokens=90,
+        max_tokens=180,
         max_chars=220,
     )
 
@@ -319,6 +348,40 @@ def try_rewrite_assistant_answer(
     )
 
 
+def try_prepare_visual_task(
+    question: str,
+    *,
+    backend: str,
+    model: str,
+    endpoint: str,
+    timeout: float,
+) -> str | None:
+    question = question.strip()
+    if not question:
+        return None
+
+    return _try_generate_plain_text(
+        backend=backend,
+        model=model,
+        endpoint=endpoint,
+        timeout=timeout,
+        system_prompt=(
+            "Ты помогаешь подготовить короткую задачу для другой модели, которая ответит по OCR и подписи картинки. "
+            "Переформулируй вопрос пользователя в 1-2 короткие инструкции на русском. "
+            "Нужно понять, хочет ли пользователь: прочитать текст, кратко описать картинку, объяснить шутку, "
+            "или просто дать комментарий. Без markdown."
+        ),
+        user_prompt=(
+            "Вопрос пользователя про картинку:\n"
+            f"{question[:600]}\n\n"
+            "Верни только краткую задачу для модели-исполнителя."
+        ),
+        temperature=0.15,
+        max_tokens=120,
+        max_chars=300,
+    )
+
+
 def try_generate_image_cluster_summary(
     context_lines: Sequence[str],
     *,
@@ -380,7 +443,7 @@ def _try_generate_plain_text(
     }
 
     try:
-        text = _call_llama_cpp(endpoint=endpoint, payload=payload, timeout=timeout)
+        text = _call_llama_cpp_with_retries(endpoint=endpoint, payload=payload, timeout=timeout)
     except HTTPError as exc:
         logger.exception("LLM plain text request failed: %s", _read_http_error(exc))
         return None
@@ -406,6 +469,98 @@ def _read_http_error(exc: HTTPError) -> str:
         return f"HTTP {exc.code}"
 
 
+def _build_topics_user_prompt(prompt_input: str) -> str:
+    return (
+        "Выдели 2-4 темы и 1-2 короткие фразы о характере обсуждения.\n"
+        "Не выдумывай лишнего.\n"
+        "Сообщения:\n"
+        f"{prompt_input}"
+    )
+
+
+def _build_topics_corpus(messages: Sequence[str]) -> str:
+    chunks: list[str] = []
+    total_chars = 0
+
+    for raw in messages[-MAX_MESSAGES:]:
+        value = " ".join(raw.split()).strip()
+        if not value:
+            continue
+        value = value[:TOPICS_MESSAGE_CHARS]
+        line = f"- {value}"
+        add_len = len(line) + (1 if chunks else 0)
+        if total_chars + add_len > TOPICS_INPUT_CHARS:
+            remain = TOPICS_INPUT_CHARS - total_chars
+            if remain <= 4:
+                break
+            chunks.append(line[:remain].rstrip())
+            break
+        chunks.append(line)
+        total_chars += add_len
+
+    return "\n".join(chunks)
+
+
+def _build_mood_corpus(messages: Sequence[str]) -> str:
+    cleaned_messages = [
+        " ".join(raw.split()).strip()
+        for raw in messages[-MAX_MESSAGES:]
+        if raw and raw.strip()
+    ]
+    if not cleaned_messages:
+        return ""
+
+    digest: list[str] = [f"Всего осмысленных реплик: {len(cleaned_messages)}"]
+    sample_size = min(10, len(cleaned_messages))
+    step = max(1, len(cleaned_messages) // sample_size)
+    total_chars = len(digest[0])
+
+    for raw in cleaned_messages[::step][:sample_size]:
+        if len(raw) < 6:
+            continue
+        line = f"- {raw[:MOOD_MESSAGE_CHARS]}"
+        add_len = len(line) + 1
+        if total_chars + add_len > MOOD_INPUT_CHARS:
+            break
+        digest.append(line)
+        total_chars += add_len
+
+    return "\n".join(digest)
+
+
+def _call_llama_cpp_with_retries(*, endpoint: str, payload: dict[str, Any], timeout: float) -> str:
+    current_payload = json.loads(json.dumps(payload))
+    last_error: Exception | None = None
+
+    for _attempt in range(3):
+        try:
+            return _call_llama_cpp(endpoint=endpoint, payload=current_payload, timeout=timeout)
+        except HTTPError as exc:
+            last_error = exc
+            if _is_context_size_error(exc) and _shrink_payload_user_prompt(current_payload):
+                logger.warning(
+                    "LLM request exceeded context size, retrying with shorter prompt prompt_chars=%s max_tokens=%s",
+                    _get_user_prompt_chars(current_payload),
+                    current_payload.get("max_tokens"),
+                )
+                continue
+            raise
+        except ValueError as exc:
+            last_error = exc
+            if _is_empty_length_response_error(exc) and _shrink_payload_user_prompt(current_payload):
+                logger.warning(
+                    "LLM returned truncated reasoning before final content, retrying with shorter prompt prompt_chars=%s max_tokens=%s",
+                    _get_user_prompt_chars(current_payload),
+                    current_payload.get("max_tokens"),
+                )
+                continue
+            raise
+
+    if last_error is not None:
+        raise last_error
+    raise ValueError("LLM request failed after retries")
+
+
 def _call_llama_cpp(*, endpoint: str, payload: dict[str, Any], timeout: float) -> str:
     req = Request(
         url=endpoint,
@@ -421,10 +576,125 @@ def _call_llama_cpp(*, endpoint: str, payload: dict[str, Any], timeout: float) -
     if not choices:
         raise ValueError("No choices in LLM response")
 
-    text = _extract_choice_text(choices[0])
+    choice = choices[0]
+    _log_llm_response_preview(choice, endpoint=endpoint, model=str(payload.get("model") or ""))
+    text = _extract_choice_text(choice)
     if text is None:
-        raise ValueError(f"Empty content in LLM response ({_describe_choice_shape(choices[0])})")
+        raise ValueError(_build_empty_content_error(choice))
     return text
+
+
+def _is_context_size_error(exc: HTTPError) -> bool:
+    if exc.code not in {400, 413, 422}:
+        return False
+    error_text = _read_http_error(exc).lower()
+    return "context size" in error_text or "exceeds the available context size" in error_text
+
+
+def _is_empty_length_response_error(exc: ValueError) -> bool:
+    message = str(exc)
+    return "finish_reason='length'" in message or "LLM exhausted tokens before final content was produced" in message
+
+
+def _shrink_payload_user_prompt(payload: dict[str, Any]) -> bool:
+    messages = payload.get("messages")
+    if not isinstance(messages, list) or len(messages) < 2:
+        return False
+
+    user_message = messages[-1]
+    if not isinstance(user_message, dict):
+        return False
+
+    content = user_message.get("content")
+    if not isinstance(content, str):
+        return False
+
+    current_length = len(content)
+    if current_length <= MIN_INPUT_CHARS:
+        return False
+
+    new_length = max(MIN_INPUT_CHARS, int(current_length * 0.7))
+    user_message["content"] = content[:new_length].rstrip()
+    return True
+
+
+def _reduce_payload_max_tokens(payload: dict[str, Any]) -> bool:
+    max_tokens = payload.get("max_tokens")
+    if not isinstance(max_tokens, int):
+        return False
+    if max_tokens <= MIN_MAX_TOKENS:
+        return False
+    payload["max_tokens"] = max(MIN_MAX_TOKENS, int(max_tokens * 0.5))
+    return True
+
+
+def _get_user_prompt_chars(payload: dict[str, Any]) -> int:
+    messages = payload.get("messages")
+    if not isinstance(messages, list) or not messages:
+        return 0
+    message = messages[-1]
+    if not isinstance(message, dict):
+        return 0
+    content = message.get("content")
+    return len(content) if isinstance(content, str) else 0
+
+
+def _build_empty_content_error(choice: Any) -> str:
+    description = _describe_choice_shape(choice)
+    if not isinstance(choice, dict):
+        return f"Empty content in LLM response ({description})"
+
+    finish_reason = choice.get("finish_reason")
+    message = choice.get("message")
+    reasoning_len = 0
+    if isinstance(message, dict):
+        reasoning = message.get("reasoning_content")
+        if isinstance(reasoning, str):
+            reasoning_len = len(reasoning.strip())
+
+    if finish_reason == "length" and reasoning_len > 0:
+        return (
+            "LLM exhausted tokens before final content was produced "
+            f"(reasoning_len={reasoning_len}; {description})"
+        )
+    return f"Empty content in LLM response ({description})"
+
+
+def _log_llm_response_preview(choice: Any, *, endpoint: str, model: str) -> None:
+    if not isinstance(choice, dict):
+        logger.info("LLM raw response: endpoint=%s model=%s choice_type=%s", endpoint, model, type(choice).__name__)
+        return
+
+    finish_reason = choice.get("finish_reason")
+    message = choice.get("message")
+    content_preview = ""
+    reasoning_preview = ""
+
+    if isinstance(message, dict):
+        content = message.get("content")
+        reasoning = message.get("reasoning_content")
+        if isinstance(content, str):
+            content_preview = _short_preview(content)
+        elif isinstance(content, list):
+            content_preview = _short_preview(_extract_message_text(message) or "")
+        if isinstance(reasoning, str):
+            reasoning_preview = _short_preview(reasoning)
+
+    logger.info(
+        "LLM raw response: endpoint=%s model=%s finish_reason=%s content_preview=%r reasoning_preview=%r",
+        endpoint,
+        model,
+        finish_reason,
+        content_preview,
+        reasoning_preview,
+    )
+
+
+def _short_preview(text: str) -> str:
+    normalized = " ".join(text.split()).strip()
+    if len(normalized) <= LLM_LOG_PREVIEW_CHARS:
+        return normalized
+    return normalized[:LLM_LOG_PREVIEW_CHARS].rstrip() + "..."
 
 
 def _describe_choice_shape(choice: Any) -> str:
