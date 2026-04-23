@@ -808,8 +808,6 @@ def _looks_like_meta_llm_line(text: str) -> bool:
         "я обязан сообщить",
         "не имею доступа",
         "я не вижу фото",
-        "я ее не вижу",
-        "я её не вижу",
         "я не вижу изображение",
         "я не могу видеть изображение",
         "я ее не могу видеть",
@@ -820,11 +818,35 @@ def _looks_like_meta_llm_line(text: str) -> bool:
     return any(marker in lowered for marker in markers)
 
 
-def _is_usable_chat_answer(text: str) -> bool:
+def _asks_for_photo_upload(text: str) -> bool:
+    lowered = " ".join(text.lower().split())
+    markers = (
+        "пришлите картинку",
+        "пришли картинку",
+        "пришлите фото",
+        "скинь фото",
+        "скидывай фото",
+        "отправь фото",
+        "send the image",
+        "send me the photo",
+    )
+    return any(marker in lowered for marker in markers)
+
+
+def _is_usable_chat_answer(
+    text: str,
+    *,
+    looks_like_photo_question: bool,
+    has_visual_context: bool,
+) -> bool:
     normalized = text.strip()
     if not normalized:
         return False
-    return not _looks_like_meta_llm_line(normalized) and not _looks_like_rewrite_refusal(normalized)
+    if _looks_like_meta_llm_line(normalized) or _looks_like_rewrite_refusal(normalized):
+        return False
+    if looks_like_photo_question and has_visual_context and _asks_for_photo_upload(normalized):
+        return False
+    return True
 
 
 def _looks_like_photo_question(question: str) -> bool:
@@ -848,17 +870,26 @@ def _finalize_chat_answer(
     has_visual_context: bool,
     settings: object,
 ) -> str:
+    looks_like_photo_question = _looks_like_photo_question(question)
     sanitized_primary = _sanitize_chat_answer(primary_answer)
-    if _is_usable_chat_answer(sanitized_primary):
+    if _is_usable_chat_answer(
+        sanitized_primary,
+        looks_like_photo_question=looks_like_photo_question,
+        has_visual_context=has_visual_context,
+    ):
         return sanitized_primary
 
     rewritten = _maybe_rewrite_chat_answer(primary_answer, settings)
     sanitized_rewritten = _sanitize_chat_answer(rewritten)
-    if _is_usable_chat_answer(sanitized_rewritten):
+    if _is_usable_chat_answer(
+        sanitized_rewritten,
+        looks_like_photo_question=looks_like_photo_question,
+        has_visual_context=has_visual_context,
+    ):
         return sanitized_rewritten
 
     return _chat_fallback_answer(
-        looks_like_photo_question=_looks_like_photo_question(question),
+        looks_like_photo_question=looks_like_photo_question,
         has_visual_context=has_visual_context,
     )
 

@@ -56,6 +56,16 @@ def test_extract_message_text_supports_list_with_output_text() -> None:
     assert _extract_message_text(message) == "РѕС‚РІРµС‚ РёР· output_text"
 
 
+def test_extract_message_text_supports_content_dict() -> None:
+    message = {"content": {"type": "text", "text": "  ответ из dict  "}}
+    assert _extract_message_text(message) == "ответ из dict"
+
+
+def test_extract_message_text_supports_list_with_output_text() -> None:
+    message = {"content": [{"type": "output_text", "output_text": "  ответ из output_text  "}]}
+    assert _extract_message_text(message) == "ответ из output_text"
+
+
 def test_extract_message_text_falls_back_to_message_text_field() -> None:
     message = {"content": [], "text": "  С‚РµРєСЃС‚ РёР· message.text  "}
     assert _extract_message_text(message) == "С‚РµРєСЃС‚ РёР· message.text"

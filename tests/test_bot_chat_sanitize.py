@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from bot import (
+    _asks_for_photo_upload,
     _chat_fallback_answer,
     _finalize_chat_answer,
     _looks_like_meta_llm_line,
@@ -54,6 +55,28 @@ def test_finalize_chat_answer_uses_fallback_for_meta_response() -> None:
 
     result = _finalize_chat_answer(
         "Я должен объявить, что как ИИ не вижу фото.",
+        question="что на фото?",
+        has_visual_context=True,
+        settings=_Settings(),
+    )
+    assert result == "По фото пока не очень понятно, уточни что именно разобрать."
+
+
+def test_asks_for_photo_upload_detects_russian_phrase() -> None:
+    assert _asks_for_photo_upload("Пришлите картинку, я посмотрю.") is True
+
+
+def test_finalize_chat_answer_rejects_reupload_request_for_photo_context() -> None:
+    class _Settings:
+        llm_endpoint = "http://127.0.0.1:8080/v1/chat/completions"
+        llm_model = "primary"
+        llm_chat_endpoint = "http://127.0.0.1:8080/v1/chat/completions"
+        llm_chat_model = "primary"
+        llm_backend = "llama_cpp"
+        llm_timeout = 5.0
+
+    result = _finalize_chat_answer(
+        "Пришлите картинку, я посмотрю.",
         question="что на фото?",
         has_visual_context=True,
         settings=_Settings(),
