@@ -437,8 +437,15 @@ def _looks_like_rewrite_refusal(text: str) -> bool:
         "не могу переписать",
         "не имею доступа",
         "не могу помочь с этим",
+        "я должен сообщить",
+        "я должен объявить",
+        "i must inform",
+        "i should disclose",
         "как языковая модель",
+        "как ии",
         "как модель",
+        "as an ai",
+        "as a language model",
     )
     return any(marker in lowered for marker in refusal_markers)
 
@@ -458,27 +465,116 @@ def _sanitize_chat_answer(text: str) -> str:
         if line:
             cleaned_lines.append(line)
 
-    if not cleaned_lines:
-        return "Сформулируй вопрос чуть точнее, и я отвечу."
-    return "\n".join(cleaned_lines)
+    return "\n".join(cleaned_lines).strip()
 
 
 def _looks_like_meta_llm_line(text: str) -> bool:
     lowered = " ".join(text.lower().split())
     markers = (
+        "thinking process",
+        "reasoning:",
+        "chain of thought",
         "since i cannot see the photo",
         "i cannot see the photo",
+        "i cannot see the image",
         "cannot view the image",
         "i cannot view images",
         "i can't view images",
+        "i do not have access",
+        "i should disclose",
+        "i must inform",
         "as an ai language model",
+        "as a language model",
+        "as an ai",
+        "как ии",
         "как языковая модель",
+        "я должен объявить",
+        "я должен сообщить",
+        "я обязан сообщить",
+        "не имею доступа",
         "я не вижу фото",
+        "я не вижу изображение",
         "я не могу видеть изображение",
         "я не могу просматривать изображения",
         "не могу увидеть фото",
     )
     return any(marker in lowered for marker in markers)
+
+
+def _asks_for_photo_upload(text: str) -> bool:
+    lowered = " ".join(text.lower().split())
+    markers = (
+        "пришлите картинку",
+        "пришли картинку",
+        "пришлите фото",
+        "скинь фото",
+        "скидывай фото",
+        "отправь фото",
+        "send the image",
+        "send me the photo",
+    )
+    return any(marker in lowered for marker in markers)
+
+
+def _is_usable_chat_answer(
+    text: str,
+    *,
+    looks_like_photo_question: bool,
+    has_visual_context: bool,
+) -> bool:
+    normalized = text.strip()
+    if not normalized:
+        return False
+    if _looks_like_meta_llm_line(normalized) or _looks_like_rewrite_refusal(normalized):
+        return False
+    if looks_like_photo_question and has_visual_context and _asks_for_photo_upload(normalized):
+        return False
+    return True
+
+
+def _looks_like_photo_question(question: str) -> bool:
+    lowered = " ".join(question.lower().split())
+    photo_markers = ("фото", "фотке", "картинк", "изображен", "скрин", "на снимке", "на фото")
+    return any(marker in lowered for marker in photo_markers)
+
+
+def _chat_fallback_answer(*, looks_like_photo_question: bool, has_visual_context: bool) -> str:
+    if looks_like_photo_question and has_visual_context:
+        return "По фото пока не очень понятно, уточни что именно разобрать."
+    if looks_like_photo_question:
+        return "По фото пока мало понятно, опиши что именно важно."
+    return "Сформулируй вопрос чуть точнее, и я отвечу."
+
+
+def _finalize_chat_answer(
+    primary_answer: str,
+    *,
+    question: str,
+    has_visual_context: bool,
+    settings: object,
+) -> str:
+    looks_like_photo_question = _looks_like_photo_question(question)
+    sanitized_primary = _sanitize_chat_answer(primary_answer)
+    if _is_usable_chat_answer(
+        sanitized_primary,
+        looks_like_photo_question=looks_like_photo_question,
+        has_visual_context=has_visual_context,
+    ):
+        return sanitized_primary
+
+    rewritten = _maybe_rewrite_chat_answer(primary_answer, settings)
+    sanitized_rewritten = _sanitize_chat_answer(rewritten)
+    if _is_usable_chat_answer(
+        sanitized_rewritten,
+        looks_like_photo_question=looks_like_photo_question,
+        has_visual_context=has_visual_context,
+    ):
+        return sanitized_rewritten
+
+    return _chat_fallback_answer(
+        looks_like_photo_question=looks_like_photo_question,
+        has_visual_context=has_visual_context,
+    )
 
 
 async def _safe_delete_command_message(bot: Bot, message: Message) -> None:
@@ -736,8 +832,13 @@ async def main() -> None:
         if answer is None:
             await _finish_pending(pending_message, pending_started, "Не смогла получить ответ от LLM.")
             return
-        answer = _maybe_rewrite_chat_answer(answer, settings)
-        await _finish_pending(pending_message, pending_started, escape(_sanitize_chat_answer(answer)))
+        final_answer = _finalize_chat_answer(
+            answer,
+            question=normalized_question,
+            has_visual_context=bool(visual_context),
+            settings=settings,
+        )
+        await _finish_pending(pending_message, pending_started, escape(final_answer))
 
     @router.message(Command("visual"))
     async def on_visual(message: Message) -> None:
@@ -941,8 +1042,13 @@ async def main() -> None:
                     timeout=settings.llm_timeout,
                 )
                 if answer is not None:
-                    answer = _maybe_rewrite_chat_answer(answer, settings)
-                    await _finish_pending(pending_message, pending_started, escape(_sanitize_chat_answer(answer)))
+                    final_answer = _finalize_chat_answer(
+                        answer,
+                        question=question,
+                        has_visual_context=bool(visual_context),
+                        settings=settings,
+                    )
+                    await _finish_pending(pending_message, pending_started, escape(final_answer))
                     return
                 await _finish_pending(pending_message, pending_started, "Не смогла получить ответ от LLM.")
                 return
