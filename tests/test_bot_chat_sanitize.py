@@ -1,6 +1,13 @@
 from __future__ import annotations
 
-from bot import _looks_like_meta_llm_line, _looks_like_rewrite_refusal, _sanitize_chat_answer
+from bot import (
+    _asks_for_photo_upload,
+    _chat_fallback_answer,
+    _finalize_chat_answer,
+    _looks_like_meta_llm_line,
+    _looks_like_rewrite_refusal,
+    _sanitize_chat_answer,
+)
 
 
 def test_sanitize_chat_answer_removes_input_message_prefix() -> None:
@@ -23,8 +30,63 @@ def test_looks_like_rewrite_refusal_detects_common_refusal() -> None:
 
 def test_sanitize_chat_answer_drops_meta_cannot_see_photo_line() -> None:
     raw = "Since I cannot see the photo, I must inform the user that the photo"
-    assert _sanitize_chat_answer(raw) == "Сформулируй вопрос чуть точнее, и я отвечу."
+    assert _sanitize_chat_answer(raw) == ""
 
 
 def test_looks_like_meta_llm_line_detects_english_visual_refusal() -> None:
     assert _looks_like_meta_llm_line("I cannot see the photo directly.") is True
+
+
+def test_fallback_for_photo_with_visual_context_is_human() -> None:
+    assert (
+        _chat_fallback_answer(looks_like_photo_question=True, has_visual_context=True)
+        == "По фото пока не очень понятно, уточни что именно разобрать."
+    )
+
+
+def test_finalize_chat_answer_uses_fallback_for_meta_response() -> None:
+    class _Settings:
+        llm_endpoint = "http://127.0.0.1:8080/v1/chat/completions"
+        llm_model = "primary"
+        llm_chat_endpoint = "http://127.0.0.1:8080/v1/chat/completions"
+        llm_chat_model = "primary"
+        llm_backend = "llama_cpp"
+        llm_timeout = 5.0
+
+    result = _finalize_chat_answer(
+        "Я должен объявить, что как ИИ не вижу фото.",
+        question="что на фото?",
+        has_visual_context=True,
+        settings=_Settings(),
+    )
+    assert result == "По фото пока не очень понятно, уточни что именно разобрать."
+
+
+def test_asks_for_photo_upload_detects_russian_phrase() -> None:
+    assert _asks_for_photo_upload("Пришлите картинку, я посмотрю.") is True
+
+
+def test_asks_for_photo_upload_detects_photo_missing_phrase() -> None:
+    assert _asks_for_photo_upload("Фото не прислано.") is True
+
+
+def test_asks_for_photo_upload_detects_ne_vizhu_photo_phrase() -> None:
+    assert _asks_for_photo_upload("Пришли фото, а то я не вижу изображение.") is True
+
+
+def test_finalize_chat_answer_rejects_reupload_request_for_photo_context() -> None:
+    class _Settings:
+        llm_endpoint = "http://127.0.0.1:8080/v1/chat/completions"
+        llm_model = "primary"
+        llm_chat_endpoint = "http://127.0.0.1:8080/v1/chat/completions"
+        llm_chat_model = "primary"
+        llm_backend = "llama_cpp"
+        llm_timeout = 5.0
+
+    result = _finalize_chat_answer(
+        "Пришлите картинку, я посмотрю.",
+        question="что на фото?",
+        has_visual_context=True,
+        settings=_Settings(),
+    )
+    assert result == "По фото пока не очень понятно, уточни что именно разобрать."
