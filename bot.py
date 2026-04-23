@@ -40,6 +40,7 @@ from app.llm_topics import (
     try_generate_roast,
     try_generate_svin_comment,
     try_generate_svin_joke,
+    try_prepare_visual_task,
     try_rewrite_assistant_answer,
 )
 from app.report import activity_by_hour, calculate_daily_stats, format_daily_report
@@ -133,16 +134,60 @@ def _extract_command_args(message: Message) -> str:
     return parts[1].strip() if len(parts) > 1 else ""
 
 
+def _extract_command_text(message: Message) -> str:
+    raw_text = (message.text or message.caption or "").strip()
+    if not raw_text.startswith("/"):
+        return ""
+    return raw_text
+
+
+def _log_incoming_command(message: Message) -> None:
+    command_text = _extract_command_text(message)
+    if not command_text:
+        return
+
+    user = message.from_user
+    logger.info(
+        "Incoming command: chat_id=%s message_id=%s user_id=%s username=%s full_name=%s text=%r",
+        message.chat.id,
+        message.message_id,
+        user.id if user else None,
+        user.username if user else None,
+        user.full_name if user else None,
+        command_text[:500],
+    )
+
+
 def _reply_has_visual_file(message: Message) -> bool:
     if not ENABLE_VISUAL_FEATURES:
         return False
-    return bool(message.reply_to_message and get_image_file_id(message.reply_to_message))
+    source = _find_visual_source_message(message, include_self=False)
+    return source is not None
+
+
+def _message_has_visual_file(message: Message) -> bool:
+    if not ENABLE_VISUAL_FEATURES:
+        return False
+    return get_image_file_id(message) is not None
+
+
+def _find_visual_source_message(message: Message, *, include_self: bool) -> Message | None:
+    current = message if include_self else message.reply_to_message
+    depth = 0
+    while current is not None and depth < 6:
+        if get_image_file_id(current) is not None:
+            return current
+        current = current.reply_to_message
+        depth += 1
+    return None
 
 
 def _extract_question_or_visual_default(message: Message) -> str:
     question = _extract_command_args(message)
     if question.strip():
         return question
+    if _message_has_visual_file(message):
+        return "что на картинке?"
     if _reply_has_visual_file(message):
         return "что на картинке?"
     return ""
@@ -200,7 +245,7 @@ def _normalize_reply_question(question: str, reply_text_context: str | None) -> 
 def _build_reply_visual_context(message: Message) -> str | None:
     if not ENABLE_VISUAL_FEATURES:
         return None
-    reply = message.reply_to_message
+    reply = _find_visual_source_message(message, include_self=False)
     if not reply:
         return None
 
@@ -236,9 +281,45 @@ def _build_reply_visual_context(message: Message) -> str | None:
     return "\n".join(parts) if parts else "Картинка знакома, но осмысленного описания пока нет."
 
 
+def _build_message_visual_context(message: Message) -> str | None:
+    if not ENABLE_VISUAL_FEATURES:
+        return None
+    event = get_image_event_by_message(chat_id=message.chat.id, message_id=message.message_id)
+    if not event:
+        return None
+
+    status = str(event.get("processing_status") or "")
+    if status != "processed":
+        return "Визуальный контекст этой картинки пока не обработан."
+
+    parts: list[str] = []
+    cluster_id = event.get("cluster_id")
+    cluster_summary = str(event.get("cluster_summary") or "").strip()
+    summary_text = str(event.get("summary_text") or "").strip()
+    ocr_text = str(event.get("ocr_text") or "").strip()
+    context_text = str(event.get("context_text") or "").strip()
+    usage_count = event.get("usage_count")
+
+    if cluster_id:
+        parts.append(f"visual cluster #{cluster_id}")
+    if usage_count:
+        parts.append(f"повторов в памяти: {usage_count}")
+    if cluster_summary:
+        parts.append(f"описание кластера: {cluster_summary}")
+    if summary_text and summary_text != cluster_summary:
+        parts.append(f"OCR/label: {summary_text}")
+    if ocr_text:
+        parts.append(f"OCR текст: {' '.join(ocr_text.split())[:500]}")
+    if context_text:
+        parts.append(f"caption/context: {context_text[:500]}")
+
+    return "\n".join(parts) if parts else "Картинка знакома, но осмысленного описания пока нет."
+
+
 async def _wait_for_reply_visual_context(message: Message) -> str | None:
     if not ENABLE_VISUAL_FEATURES:
         return None
+    await _ensure_reply_visual_processing(message)
     if not _reply_has_visual_file(message):
         return _build_reply_visual_context(message)
 
@@ -252,15 +333,69 @@ async def _wait_for_reply_visual_context(message: Message) -> str | None:
         await asyncio.sleep(VISUAL_CONTEXT_POLL_SECONDS)
 
 
+async def _wait_for_message_visual_context(message: Message, settings: object) -> str | None:
+    if not ENABLE_VISUAL_FEATURES:
+        return None
+    if not _message_has_visual_file(message):
+        return _build_message_visual_context(message)
+
+    await _ensure_message_visual_processing(message, settings)
+    deadline = time.monotonic() + VISUAL_CONTEXT_WAIT_SECONDS
+    while True:
+        visual_context = _build_message_visual_context(message)
+        if visual_context is not None:
+            return visual_context
+        if time.monotonic() >= deadline:
+            return None
+        await asyncio.sleep(VISUAL_CONTEXT_POLL_SECONDS)
+
+
+async def _ensure_reply_visual_processing(message: Message) -> bool:
+    if not ENABLE_VISUAL_FEATURES:
+        return False
+    reply = _find_visual_source_message(message, include_self=False)
+    if not reply:
+        return False
+
+    existing_event = get_image_event_by_message(chat_id=reply.chat.id, message_id=reply.message_id)
+    if existing_event is not None:
+        return False
+
+    logger.info(
+        "Scheduling visual processing from reply command: chat_id=%s message_id=%s trigger_message_id=%s",
+        reply.chat.id,
+        reply.message_id,
+        message.message_id,
+    )
+    asyncio.create_task(_process_message_image_limited(message.bot, reply, settings=get_settings()))
+    return True
+
+
+async def _ensure_message_visual_processing(message: Message, settings: object) -> bool:
+    if not ENABLE_VISUAL_FEATURES:
+        return False
+    if get_image_file_id(message) is None:
+        return False
+
+    existing_event = get_image_event_by_message(chat_id=message.chat.id, message_id=message.message_id)
+    if existing_event is not None:
+        return False
+
+    logger.info(
+        "Scheduling visual processing from command message: chat_id=%s message_id=%s",
+        message.chat.id,
+        message.message_id,
+    )
+    asyncio.create_task(_process_message_image_limited(message.bot, message, settings=settings))
+    return True
+
+
 def _format_reply_visual_status(message: Message) -> str:
     if not ENABLE_VISUAL_FEATURES:
         return "Визуальная обработка временно отключена."
-    reply = message.reply_to_message
+    reply = _find_visual_source_message(message, include_self=False)
     if not reply:
         return "Ответь командой /seen на картинку, GIF или image-файл."
-
-    if get_image_file_id(reply) is None:
-        return "В reply-сообщении нет картинки/GIF/image-файла."
 
     event = get_image_event_by_message(chat_id=reply.chat.id, message_id=reply.message_id)
     if not event:
@@ -283,7 +418,7 @@ def _format_reply_visual_status(message: Message) -> str:
     elif status == "failed":
         lines.append("— статус: не изучен, обработка не удалась или файл был пропущен")
     else:
-        lines.append(f"— статус: {status}")
+        lines.append(f"— статус: {_format_visual_processing_stage(status)}")
 
     if cluster_id:
         lines.append(f"— cluster: #{cluster_id}")
@@ -301,6 +436,85 @@ def _format_reply_visual_status(message: Message) -> str:
         lines.append(f"— обработан: {processed_at}")
 
     return "\n".join(lines)
+
+
+async def _wait_and_refresh_visual_status(
+    pending_message: Message,
+    started_at: float,
+    source_message: Message,
+    *,
+    initial_text: str,
+) -> None:
+    await _finish_pending(pending_message, started_at, escape(initial_text))
+
+    deadline = time.monotonic() + VISUAL_CONTEXT_WAIT_SECONDS
+    while time.monotonic() < deadline:
+        await asyncio.sleep(VISUAL_CONTEXT_POLL_SECONDS)
+        status_text = _format_reply_visual_status(source_message)
+        if "изучен" in status_text or "не удалась" in status_text:
+            try:
+                await pending_message.edit_text(escape(status_text))
+            except Exception:
+                return
+            return
+    try:
+        await pending_message.edit_text(
+            escape(
+                "Ладно, спроси позже, я устала.\n"
+                "Обработка картинки что-то затянулась."
+            )
+        )
+    except Exception:
+        return
+
+
+async def _get_visual_context_for_ask(message: Message, settings: object) -> str | None:
+    if _message_has_visual_file(message):
+        return await _wait_for_message_visual_context(message, settings)
+    if _reply_has_visual_file(message):
+        return await _wait_for_reply_visual_context(message)
+    return None
+
+
+def _build_visual_task_question(question: str, visual_context: str | None, settings: object) -> str:
+    if not visual_context:
+        return question
+
+    rewrite_model = str(getattr(settings, "llm_chat_model", "") or "").strip()
+    rewrite_endpoint = str(getattr(settings, "llm_chat_endpoint", "") or "").strip()
+    primary_model = str(getattr(settings, "llm_model", "") or "").strip()
+    primary_endpoint = str(getattr(settings, "llm_endpoint", "") or "").strip()
+    if not rewrite_model or not rewrite_endpoint:
+        return question
+    if rewrite_model == primary_model and rewrite_endpoint == primary_endpoint:
+        return question
+
+    rewritten = try_prepare_visual_task(
+        question,
+        backend=getattr(settings, "llm_backend", "llama_cpp"),
+        model=rewrite_model,
+        endpoint=rewrite_endpoint,
+        timeout=float(getattr(settings, "llm_timeout", 10.0)),
+    )
+    if rewritten:
+        logger.info("Visual ask task rewritten by chat model: original=%r rewritten=%r", question[:200], rewritten[:200])
+        return rewritten
+    return question
+
+
+def _format_visual_processing_stage(status: str) -> str:
+    normalized = (status or "").strip().lower()
+    stage_map = {
+        "pending": "ожидает обработки (0%)",
+        "queued": "в очереди (10%)",
+        "downloading": "скачивает файл (30%)",
+        "hashing": "считает хэш (50%)",
+        "ocr": "распознаёт текст (70%)",
+        "clustering": "сопоставляет с визуальной памятью (85%)",
+        "processed": "изучен (100%)",
+        "failed": "обработка не удалась (100%)",
+    }
+    return stage_map.get(normalized, normalized or "неизвестно")
 
 
 def _build_reply_text_context(message: Message, bot_username: str | None, bot_id: int) -> str | None:
@@ -343,6 +557,8 @@ def _build_question_with_context(
     short_memory: str | None = None,
 ) -> str:
     question = _inject_question_hints(question)
+    text_extraction_question = _looks_like_text_extraction_question(question)
+    image_comment_question = _looks_like_image_comment_question(question)
     if not visual_context and not reply_text_context and not short_memory:
         return question
     parts = [
@@ -351,7 +567,21 @@ def _build_question_with_context(
         "Не обращайся к пользователю по имени, если он сам не представился в текущем сообщении.",
         f"Вопрос пользователя: {question}",
     ]
-    if short_memory:
+    if visual_context and text_extraction_question:
+        parts.append(
+            "Пользователь хочет прочитать текст с reply-картинки. "
+            "Опирайся только на OCR/label/caption из визуального контекста ниже. "
+            "Не используй короткую память чата, если она не относится к изображению."
+        )
+    elif visual_context and image_comment_question:
+        parts.append(
+            "Пользователь просит кратко объяснить или прокомментировать картинку. "
+            "Дай 1-2 коротких осмысленных предложения по содержимому изображения. "
+            "Скажи, что на ней изображено или в чём шутка/смысл, если это понятно по OCR/label/caption. "
+            "Не отвечай слишком общими фразами вроде 'это ОИ', 'это картинка' или 'это мем'. "
+            "Можно с лёгкой иронией, но без выдумывания деталей, которых нет в OCR/label/caption."
+        )
+    elif short_memory:
         parts.append(
             "Короткий контекст последних сообщений. Используй его только если он помогает понять вопрос:\n"
             f"{short_memory}"
@@ -360,11 +590,56 @@ def _build_question_with_context(
         parts.append(f"Сообщение бота, на которое ответил пользователь:\n{reply_text_context}")
     if visual_context:
         parts.append(
-            "Если вопрос относится к reply-картинке, используй только сохранённый визуальный контекст ниже. "
+            "Если вопрос относится к картинке, используй только сохранённый визуальный контекст ниже. "
             "Не утверждай, что видишь изображение напрямую.\n"
-            f"Визуальный контекст reply-сообщения:\n{visual_context}"
+            f"Визуальный контекст изображения:\n{visual_context}"
         )
     return "\n\n".join(parts)
+
+
+def _looks_like_text_extraction_question(question: str) -> bool:
+    lowered = " ".join(question.lower().split())
+    markers = (
+        "что тут написано",
+        "что написано",
+        "какой текст",
+        "прочитай текст",
+        "что за текст",
+        "что на скрине написано",
+        "что на картинке написано",
+        "прочитай",
+        "ocr",
+        "текст с картинки",
+        "текст на картинке",
+    )
+    return any(marker in lowered for marker in markers)
+
+
+def _looks_like_image_comment_question(question: str) -> bool:
+    lowered = " ".join(question.lower().split())
+    markers = (
+        "что тут",
+        "что это",
+        "что за",
+        "что тут за",
+        "чо тут",
+        "чо это",
+        "что на картинке",
+        "что на фото",
+        "что изображено",
+        "что нарисовано",
+        "что за мем",
+        "в чем прикол",
+        "в чём прикол",
+        "прикол в чем",
+        "объясни мем",
+        "объясни картинку",
+        "прокомментируй",
+        "комментани",
+        "что сказать",
+        "что происходит",
+    )
+    return any(marker in lowered for marker in markers) and not _looks_like_text_extraction_question(question)
 
 
 def _inject_question_hints(question: str) -> str:
@@ -391,6 +666,46 @@ def _normalize_llm_text_block(text: str, max_lines: int = 3) -> str:
         if len(lines) >= max_lines:
             break
     return "\n".join(lines) if lines else text.strip()
+
+
+def _call_llm_with_chat_fallback(
+    generator: object,
+    *,
+    settings: object,
+    primary_kwargs: dict[str, object],
+) -> str | None:
+    result = generator(
+        **primary_kwargs,
+        backend=getattr(settings, "llm_backend", "llama_cpp"),
+        model=getattr(settings, "llm_model", ""),
+        endpoint=getattr(settings, "llm_endpoint", ""),
+        timeout=float(getattr(settings, "llm_timeout", 10.0)),
+    )
+    if result is not None:
+        return result
+
+    rewrite_model = str(getattr(settings, "llm_chat_model", "") or "").strip()
+    rewrite_endpoint = str(getattr(settings, "llm_chat_endpoint", "") or "").strip()
+    primary_model = str(getattr(settings, "llm_model", "") or "").strip()
+    primary_endpoint = str(getattr(settings, "llm_endpoint", "") or "").strip()
+    if not rewrite_model or not rewrite_endpoint:
+        return None
+    if rewrite_model == primary_model and rewrite_endpoint == primary_endpoint:
+        return None
+
+    logger.info(
+        "Primary LLM command failed; retrying with chat model generator=%s rewrite_model=%s rewrite_endpoint=%s",
+        getattr(generator, "__name__", type(generator).__name__),
+        rewrite_model,
+        rewrite_endpoint,
+    )
+    return generator(
+        **primary_kwargs,
+        backend=getattr(settings, "llm_backend", "llama_cpp"),
+        model=rewrite_model,
+        endpoint=rewrite_endpoint,
+        timeout=float(getattr(settings, "llm_timeout", 10.0)),
+    )
 
 
 def _maybe_rewrite_chat_answer(answer: str, settings: object) -> str:
@@ -495,6 +810,8 @@ def _looks_like_meta_llm_line(text: str) -> bool:
         "я не вижу фото",
         "я не вижу изображение",
         "я не могу видеть изображение",
+        "я ее не могу видеть",
+        "я её не могу видеть",
         "я не могу просматривать изображения",
         "не могу увидеть фото",
     )
@@ -663,33 +980,42 @@ async def main() -> None:
     async def on_stats(message: Message) -> None:
         if message.chat.id != settings.allowed_chat_id:
             return
+        _log_incoming_command(message)
         await _safe_delete_command_message(bot, message)
 
         pending_message, pending_started = await _send_pending(message)
-        today = date.today()
-        messages = _get_chat_messages_by_day(today, settings.allowed_chat_id)
-        user_names = build_user_names(messages)
+        try:
+            today = date.today()
+            messages = _get_chat_messages_by_day(today, settings.allowed_chat_id)
+            user_names = build_user_names(messages)
 
-        stats = calculate_daily_stats(messages)
-        topics, character, used_llm_topics = build_topics_and_summary_lines(
-            messages=messages,
-            stats=stats,
-            user_names=user_names,
-            settings=settings,
-            return_meta=True,
-        )
+            stats = calculate_daily_stats(messages)
+            topics, character, used_llm_topics = build_topics_and_summary_lines(
+                messages=messages,
+                stats=stats,
+                user_names=user_names,
+                settings=settings,
+                return_meta=True,
+            )
 
-        report_text = format_daily_report(
-            report_date=today,
-            stats=stats,
-            topics=topics,
-            character_phrases=character,
-            user_names=user_names,
-            title_prefix="📊 На данный момент за",
-        )
-        if settings.use_llm_topics and stats.total_messages > 0 and not used_llm_topics:
-            report_text = f"{report_text}\n\nпу-пу-пу технические шоколадки"
-        await _finish_pending(pending_message, pending_started, report_text)
+            report_text = format_daily_report(
+                report_date=today,
+                stats=stats,
+                topics=topics,
+                character_phrases=character,
+                user_names=user_names,
+                title_prefix="📊 На данный момент за",
+            )
+            if settings.use_llm_topics and stats.total_messages > 0 and not used_llm_topics:
+                report_text = f"{report_text}\n\nпу-пу-пу технические шоколадки"
+            await _finish_pending(pending_message, pending_started, report_text)
+        except Exception:
+            logger.exception("Failed to build /stats response")
+            await _finish_pending(
+                pending_message,
+                pending_started,
+                "Не смогла собрать /stats, используй ещё раз через пару секунд.",
+            )
 
     @router.message(Command("dead"))
     async def on_dead(message: Message) -> None:
@@ -756,18 +1082,19 @@ async def main() -> None:
     async def on_mood(message: Message) -> None:
         if message.chat.id != settings.allowed_chat_id:
             return
+        _log_incoming_command(message)
         await _safe_delete_command_message(bot, message)
 
         pending_message, pending_started = await _send_pending(message)
         messages = _get_chat_messages_by_day(date.today(), settings.allowed_chat_id)
         mood = None
         if settings.use_llm_topics:
-            mood = try_generate_mood_summary(
-                _build_topics_source(messages),
-                backend=settings.llm_backend,
-                model=settings.llm_model,
-                endpoint=settings.llm_endpoint,
-                timeout=settings.llm_timeout,
+            mood = _call_llm_with_chat_fallback(
+                try_generate_mood_summary,
+                settings=settings,
+                primary_kwargs={
+                    "messages": _build_topics_source(messages),
+                },
             )
         if mood is None:
             mood = _fallback_mood(len(messages))
@@ -777,16 +1104,16 @@ async def main() -> None:
     async def on_svin(message: Message) -> None:
         if message.chat.id != settings.allowed_chat_id:
             return
+        _log_incoming_command(message)
         await _safe_delete_command_message(bot, message)
 
         pending_message, pending_started = await _send_pending(message)
         joke = None
         if settings.use_llm_topics:
-            joke = try_generate_svin_joke(
-                backend=settings.llm_backend,
-                model=settings.llm_model,
-                endpoint=settings.llm_endpoint,
-                timeout=settings.llm_timeout,
+            joke = _call_llm_with_chat_fallback(
+                try_generate_svin_joke,
+                settings=settings,
+                primary_kwargs={},
             )
         if joke is not None:
             await _finish_pending(pending_message, pending_started, escape(joke))
@@ -797,6 +1124,7 @@ async def main() -> None:
     async def on_ask(message: Message) -> None:
         if message.chat.id != settings.allowed_chat_id:
             return
+        _log_incoming_command(message)
 
         question = _extract_question_or_visual_default(message)
         reply_text_context = _build_reply_text_context(message, bot_info.username, bot_info.id)
@@ -809,17 +1137,18 @@ async def main() -> None:
             await message.answer("LLM сейчас выключена.", disable_notification=True)
             return
 
-        visual_context = await _wait_for_reply_visual_context(message)
-        if _reply_has_visual_file(message) and visual_context is None:
+        visual_context = await _get_visual_context_for_ask(message, settings)
+        if (_reply_has_visual_file(message) or _message_has_visual_file(message)) and visual_context is None:
             await message.answer("Визуальный контекст этой картинки ещё не готов.", disable_notification=True)
             return
 
         pending_message, pending_started = await _send_pending(message)
         short_memory = _build_short_chat_memory(message.chat.id, message.message_id)
         normalized_question = _normalize_reply_question(question, reply_text_context)
+        llm_question = _build_visual_task_question(normalized_question, visual_context, settings)
         answer = try_answer_question(
             _build_question_with_context(
-                normalized_question,
+                llm_question,
                 visual_context,
                 reply_text_context=reply_text_context,
                 short_memory=short_memory,
@@ -844,6 +1173,7 @@ async def main() -> None:
     async def on_visual(message: Message) -> None:
         if message.chat.id != settings.allowed_chat_id:
             return
+        _log_incoming_command(message)
         await _safe_delete_command_message(bot, message)
 
         pending_message, pending_started = await _send_pending(message)
@@ -853,15 +1183,32 @@ async def main() -> None:
     async def on_seen(message: Message) -> None:
         if message.chat.id != settings.allowed_chat_id:
             return
+        _log_incoming_command(message)
         await _safe_delete_command_message(bot, message)
 
+        scheduled = await _ensure_reply_visual_processing(message)
         pending_message, pending_started = await _send_pending(message)
-        await _finish_pending(pending_message, pending_started, escape(_format_reply_visual_status(message)))
+        status_text = _format_reply_visual_status(message)
+        if scheduled:
+            status_text = (
+                "Запустила обработку reply-картинки.\n"
+                "Сейчас сама обновлю статус, если обработка успеет закончиться.\n\n"
+                f"{status_text}"
+            )
+            await _wait_and_refresh_visual_status(
+                pending_message,
+                pending_started,
+                message,
+                initial_text=status_text,
+            )
+            return
+        await _finish_pending(pending_message, pending_started, escape(status_text))
 
     @router.message(Command("chance"))
     async def on_chance(message: Message) -> None:
         if message.chat.id != settings.allowed_chat_id:
             return
+        _log_incoming_command(message)
         await _safe_delete_command_message(bot, message)
 
         global _svin_reply_chance
@@ -901,6 +1248,7 @@ async def main() -> None:
     async def on_llmroute(message: Message) -> None:
         if message.chat.id != settings.allowed_chat_id:
             return
+        _log_incoming_command(message)
         await _safe_delete_command_message(bot, message)
 
         primary = f"{settings.llm_model or '-'} @ {settings.llm_endpoint or '-'}"
@@ -924,6 +1272,7 @@ async def main() -> None:
     async def on_roast(message: Message) -> None:
         if message.chat.id != settings.allowed_chat_id:
             return
+        _log_incoming_command(message)
         await _safe_delete_command_message(bot, message)
 
         target = _extract_command_args(message).strip()
@@ -935,12 +1284,12 @@ async def main() -> None:
             return
 
         pending_message, pending_started = await _send_pending(message)
-        roast = try_generate_roast(
-            target=target,
-            backend=settings.llm_backend,
-            model=settings.llm_model,
-            endpoint=settings.llm_endpoint,
-            timeout=settings.llm_timeout,
+        roast = _call_llm_with_chat_fallback(
+            try_generate_roast,
+            settings=settings,
+            primary_kwargs={
+                "target": target,
+            },
         )
         if roast is None:
             await _finish_pending(pending_message, pending_started, "Не смогла сделать прожарку, попробуй ещё раз.")
@@ -951,6 +1300,8 @@ async def main() -> None:
     async def on_message(message: Message) -> None:
         if message.chat.id != settings.allowed_chat_id:
             return
+        if _extract_command_text(message):
+            _log_incoming_command(message)
         if message.text and message.text.strip().lower().startswith((
             "/stats",
             "/svin",
