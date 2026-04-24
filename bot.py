@@ -11,7 +11,7 @@ from html import escape
 from aiogram import Bot, Dispatcher, Router
 from aiogram.client.default import DefaultBotProperties
 from aiogram.filters import Command
-from aiogram.types import Message, MessageReactionUpdated
+from aiogram.types import Message, MessageReactionCountUpdated, MessageReactionUpdated
 
 from app.config import get_settings
 from app.db import (
@@ -130,8 +130,15 @@ def _extract_reaction_emojis(reactions: object) -> set[str]:
     emojis: set[str] = set()
     for item in reactions:
         emoji = getattr(item, "emoji", None)
+        if emoji is None:
+            reaction_type = getattr(item, "type", None)
+            emoji = getattr(reaction_type, "emoji", None)
         if emoji is None and isinstance(item, dict):
             emoji = item.get("emoji")
+            if emoji is None:
+                item_type = item.get("type")
+                if isinstance(item_type, dict):
+                    emoji = item_type.get("emoji")
         if isinstance(emoji, str) and emoji:
             emojis.add(emoji)
     return emojis
@@ -1447,17 +1454,12 @@ async def main() -> None:
             return
         await _finish_pending(pending_message, pending_started, escape(_normalize_llm_text_block(roast, max_lines=2)))
 
-    @router.message_reaction()
-    async def on_message_reaction(update: MessageReactionUpdated) -> None:
-        if update.chat.id != settings.allowed_chat_id:
-            return
-
-        emojis = _extract_reaction_emojis(getattr(update, "new_reaction", None))
+    async def _maybe_reply_to_reaction(*, chat_id: int, message_id: int, emojis: set[str]) -> None:
         reaction_emoji = _pick_reaction_for_reply(emojis)
         logger.info(
             "Reaction update: chat_id=%s message_id=%s emojis=%s selected=%s",
-            update.chat.id,
-            update.message_id,
+            chat_id,
+            message_id,
             ",".join(sorted(emojis)) if emojis else "-",
             reaction_emoji or "-",
         )
@@ -1470,7 +1472,7 @@ async def main() -> None:
             return
 
         _last_reaction_reply_ts = now_ts
-        target_text = get_message_text_by_chat_message(chat_id=update.chat.id, message_id=update.message_id) or ""
+        target_text = get_message_text_by_chat_message(chat_id=chat_id, message_id=message_id) or ""
         roast_text = try_generate_reaction_reply(
             emoji=reaction_emoji,
             message_text=target_text,
@@ -1487,13 +1489,28 @@ async def main() -> None:
             ))
         try:
             await bot.send_message(
-                chat_id=update.chat.id,
+                chat_id=chat_id,
                 text=escape(roast_text),
-                reply_to_message_id=update.message_id,
+                reply_to_message_id=message_id,
                 disable_notification=True,
             )
         except Exception:
-            logger.exception("Failed to send clown reaction reply")
+            logger.exception("Failed to send reaction reply")
+
+    @router.message_reaction()
+    async def on_message_reaction(update: MessageReactionUpdated) -> None:
+        if update.chat.id != settings.allowed_chat_id:
+            return
+
+        emojis = _extract_reaction_emojis(getattr(update, "new_reaction", None))
+        await _maybe_reply_to_reaction(chat_id=update.chat.id, message_id=update.message_id, emojis=emojis)
+
+    @router.message_reaction_count()
+    async def on_message_reaction_count(update: MessageReactionCountUpdated) -> None:
+        if update.chat.id != settings.allowed_chat_id:
+            return
+        emojis = _extract_reaction_emojis(getattr(update, "reactions", None))
+        await _maybe_reply_to_reaction(chat_id=update.chat.id, message_id=update.message_id, emojis=emojis)
 
     @router.message()
     async def on_message(message: Message) -> None:

@@ -42,6 +42,11 @@ def test_extract_reaction_emojis_supports_dict_items() -> None:
     assert _extract_reaction_emojis(reactions) == {"🤡", "🔥"}
 
 
+def test_extract_reaction_emojis_supports_reaction_count_shape() -> None:
+    reactions = [SimpleNamespace(type=SimpleNamespace(emoji="🤡")), SimpleNamespace(type=SimpleNamespace(emoji="🔥"))]
+    assert _extract_reaction_emojis(reactions) == {"🤡", "🔥"}
+
+
 def test_pick_reaction_for_reply_ignores_positive_only() -> None:
     assert _pick_reaction_for_reply({"👍", "❤️"}) is None
 
