@@ -395,7 +395,13 @@ def _format_reply_visual_status(message: Message) -> str:
         return "Визуальная обработка временно отключена."
     reply = _find_visual_source_message(message, include_self=False)
     if not reply:
-        return "Ответь командой /seen на картинку, GIF или image-файл."
+        direct_reply = message.reply_to_message
+        if direct_reply and direct_reply.voice:
+            return (
+                "Voice-сообщения пока не поддерживаются в /seen.\n"
+                "Сейчас можно проверять только фото, GIF, video-thumb и image-файлы."
+            )
+        return "Ответь командой /seen на фото, GIF, видео или image-файл."
 
     event = get_image_event_by_message(chat_id=reply.chat.id, message_id=reply.message_id)
     if not event:
@@ -431,7 +437,9 @@ def _format_reply_visual_status(message: Message) -> str:
     elif summary_text:
         lines.append(f"— OCR/label: {summary_text}")
     else:
-        lines.append("— описание: пока нет")
+        lines.append("— описание: пока нет (в файле не нашли уверенный OCR/label)")
+        if status == "processed":
+            lines.append("— примечание: это нормально для новых/немых файлов, label появится после повторов")
     if processed_at:
         lines.append(f"— обработан: {processed_at}")
 
