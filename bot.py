@@ -824,14 +824,21 @@ def _asks_for_photo_upload(text: str) -> bool:
     markers = (
         "пришлите картинку",
         "пришли картинку",
+        "пришли фото",
         "пришлите фото",
         "скинь фото",
         "скидывай фото",
         "отправь фото",
+        "фото не прислано",
+        "фото не отправлено",
+        "изображение не приложено",
+        "картинка не приложена",
         "send the image",
         "send me the photo",
     )
-    return any(marker in lowered for marker in markers)
+    if any(marker in lowered for marker in markers):
+        return True
+    return bool(re.search(r"\bне вижу\b.*\b(фото|изображ|картин)\b", lowered))
 
 
 def _is_usable_chat_answer(

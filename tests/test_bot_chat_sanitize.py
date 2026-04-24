@@ -67,6 +67,14 @@ def test_asks_for_photo_upload_detects_russian_phrase() -> None:
     assert _asks_for_photo_upload("Пришлите картинку, я посмотрю.") is True
 
 
+def test_asks_for_photo_upload_detects_photo_missing_phrase() -> None:
+    assert _asks_for_photo_upload("Фото не прислано.") is True
+
+
+def test_asks_for_photo_upload_detects_ne_vizhu_photo_phrase() -> None:
+    assert _asks_for_photo_upload("Пришли фото, а то я не вижу изображение.") is True
+
+
 def test_finalize_chat_answer_rejects_reupload_request_for_photo_context() -> None:
     class _Settings:
         llm_endpoint = "http://127.0.0.1:8080/v1/chat/completions"
