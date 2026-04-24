@@ -10,6 +10,7 @@ from app.llm_topics import (
     _describe_choice_shape,
     _extract_choice_text,
     _extract_message_text,
+    _sanitize_reasoning_output,
     _reduce_payload_max_tokens,
     _shrink_payload_user_prompt,
 )
@@ -121,6 +122,49 @@ def test_clean_plain_text_extracts_best_draft_option() -> None:
         "* \"\n"
     )
     assert _clean_plain_text(raw, max_chars=900) == "РќРµС‚, СЏ РЅРµ СЃРїР»СЋ."
+
+
+def test_sanitize_reasoning_output_without_final_answer_returns_empty() -> None:
+    raw = (
+        "Thinking Process:\n"
+        "1. Analyze the request\n"
+        "2. Analyze the context\n"
+        "Select the best option: Keep\n"
+    )
+    assert _sanitize_reasoning_output(raw) == ""
+
+
+def test_sanitize_reasoning_output_extracts_final_answer() -> None:
+    raw = (
+        "Thinking Process:\n"
+        "Analyze input\n"
+        "Final Answer: Всё ок, отвечаю кратко."
+    )
+    assert _sanitize_reasoning_output(raw) == "Всё ок, отвечаю кратко."
+
+
+def test_sanitize_reasoning_output_extracts_short_draft_option() -> None:
+    raw = (
+        "Thinking Process:\n"
+        "Draft response options:\n"
+        "* Слишком длинный вариант ответа для пользователя\n"
+        "* Коротко и по делу.\n"
+    )
+    assert _sanitize_reasoning_output(raw) == "Коротко и по делу."
+
+
+def test_sanitize_reasoning_output_select_best_option_is_rejected() -> None:
+    raw = (
+        "Thinking Process:\n"
+        "Draft response options:\n"
+        "* Select the best option: Keep\n"
+    )
+    assert _sanitize_reasoning_output(raw) == ""
+
+
+def test_sanitize_reasoning_output_keeps_normal_answer() -> None:
+    raw = "Нормальный ответ без служебного мусора."
+    assert _sanitize_reasoning_output(raw) == "Нормальный ответ без служебного мусора."
 
 
 def test_shrink_payload_user_prompt_reduces_prompt_length() -> None:

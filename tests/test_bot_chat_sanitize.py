@@ -4,8 +4,12 @@ from bot import (
     _asks_for_photo_upload,
     _chat_fallback_answer,
     _finalize_chat_answer,
+    _format_reply_visual_status,
+    _is_emoji_only_text,
     _looks_like_meta_llm_line,
     _looks_like_rewrite_refusal,
+    _needs_rewrite_or_retry,
+    _should_ignore_addressed_reply,
     _sanitize_chat_answer,
 )
 
@@ -66,6 +70,10 @@ def test_asks_for_photo_upload_detects_russian_phrase() -> None:
     assert _asks_for_photo_upload("Пришлите картинку, я посмотрю.") is True
 
 
+def test_asks_for_photo_upload_detects_missing_image_phrase() -> None:
+    assert _asks_for_photo_upload("Картинка не прислана.") is True
+
+
 def test_finalize_chat_answer_rejects_reupload_request_for_photo_context() -> None:
     class _Settings:
         llm_endpoint = "http://127.0.0.1:8080/v1/chat/completions"
@@ -82,3 +90,63 @@ def test_finalize_chat_answer_rejects_reupload_request_for_photo_context() -> No
         settings=_Settings(),
     )
     assert result == "По фото пока не очень понятно, уточни что именно разобрать."
+
+
+def test_needs_rewrite_or_retry_detects_reasoning_marker() -> None:
+    assert _needs_rewrite_or_retry("Select the best option: Keep") is True
+
+
+def test_format_reply_visual_status_reports_voice_as_unsupported(monkeypatch) -> None:
+    class _Voice:
+        duration = 123
+        file_size = 456000
+
+    class _Reply:
+        voice = _Voice()
+        video = None
+
+    class _Message:
+        reply_to_message = _Reply()
+
+    monkeypatch.setattr("bot.ENABLE_VISUAL_FEATURES", True)
+    monkeypatch.setattr("bot._find_visual_source_message", lambda message, include_self: None)
+
+    status = _format_reply_visual_status(_Message())
+    assert "тип: voice" in status
+    assert "изучение voice пока не включено" in status
+
+
+def test_format_reply_visual_status_reports_video_without_thumbnail(monkeypatch) -> None:
+    class _Video:
+        duration = 89
+        file_size = 1024 * 512
+
+    class _Reply:
+        voice = None
+        video = _Video()
+
+    class _Message:
+        reply_to_message = _Reply()
+
+    monkeypatch.setattr("bot.ENABLE_VISUAL_FEATURES", True)
+    monkeypatch.setattr("bot._find_visual_source_message", lambda message, include_self: None)
+
+    status = _format_reply_visual_status(_Message())
+    assert "тип: video" in status
+    assert "у видео нет превью-кадра" in status
+
+
+def test_is_emoji_only_text_detects_single_emoji() -> None:
+    assert _is_emoji_only_text("😭") is True
+
+
+def test_is_emoji_only_text_rejects_normal_text() -> None:
+    assert _is_emoji_only_text("чо думаешь") is False
+
+
+def test_should_ignore_addressed_reply_for_sticker_without_text() -> None:
+    assert _should_ignore_addressed_reply(text_content="", message_type="sticker") is True
+
+
+def test_should_ignore_addressed_reply_for_text_message_is_false() -> None:
+    assert _should_ignore_addressed_reply(text_content="ну че", message_type="text") is False
