@@ -18,6 +18,7 @@ from app.db import (
     close_db,
     delete_messages_older_than,
     get_image_event_by_message,
+    get_message_text_by_chat_message,
     get_messages_by_day,
     get_top_image_clusters,
     init_db,
@@ -38,6 +39,7 @@ from app.llm_topics import (
     try_answer_question,
     try_generate_mood_summary,
     try_generate_roast,
+    try_generate_reaction_reply,
     try_generate_svin_comment,
     try_generate_svin_joke,
     try_prepare_visual_task,
@@ -128,9 +130,25 @@ def _extract_reaction_emojis(reactions: object) -> set[str]:
     emojis: set[str] = set()
     for item in reactions:
         emoji = getattr(item, "emoji", None)
+        if emoji is None and isinstance(item, dict):
+            emoji = item.get("emoji")
         if isinstance(emoji, str) and emoji:
             emojis.add(emoji)
     return emojis
+
+
+def _pick_reaction_for_reply(emojis: set[str]) -> str | None:
+    if not emojis:
+        return None
+    ignore = {"👍", "❤️", "🔥", "😂", "🤣", "🙏", "👏", "👌", "😍", "💯"}
+    hostile_priority = ("🤡", "💩", "🖕", "👎", "🤮", "🤬")
+    filtered = [emoji for emoji in emojis if emoji not in ignore]
+    if not filtered:
+        return None
+    for emoji in hostile_priority:
+        if emoji in filtered:
+            return emoji
+    return filtered[0]
 
 
 def _extract_command_args(message: Message) -> str:
@@ -1435,7 +1453,15 @@ async def main() -> None:
             return
 
         emojis = _extract_reaction_emojis(getattr(update, "new_reaction", None))
-        if "🤡" not in emojis:
+        reaction_emoji = _pick_reaction_for_reply(emojis)
+        logger.info(
+            "Reaction update: chat_id=%s message_id=%s emojis=%s selected=%s",
+            update.chat.id,
+            update.message_id,
+            ",".join(sorted(emojis)) if emojis else "-",
+            reaction_emoji or "-",
+        )
+        if reaction_emoji is None:
             return
 
         global _last_reaction_reply_ts
@@ -1444,11 +1470,21 @@ async def main() -> None:
             return
 
         _last_reaction_reply_ts = now_ts
-        roast_text = random.choice((
-            "ты ахуел?",
-            "🤡 засчитан, базар фильтруй.",
-            "клоун-реакция принята, штраф по уважению.",
-        ))
+        target_text = get_message_text_by_chat_message(chat_id=update.chat.id, message_id=update.message_id) or ""
+        roast_text = try_generate_reaction_reply(
+            emoji=reaction_emoji,
+            message_text=target_text,
+            backend=settings.llm_backend,
+            model=settings.llm_model,
+            endpoint=settings.llm_endpoint,
+            timeout=settings.llm_timeout,
+        )
+        if not roast_text:
+            roast_text = random.choice((
+                "понял намёк, принято.",
+                "реакция засчитана, не кипишуй.",
+                "ладно, этот раунд за тобой.",
+            ))
         try:
             await bot.send_message(
                 chat_id=update.chat.id,
@@ -1569,7 +1605,9 @@ async def main() -> None:
     dp.include_router(router)
 
     try:
-        await dp.start_polling(bot)
+        allowed_updates = set(dp.resolve_used_update_types())
+        allowed_updates.update({"message_reaction", "message_reaction_count"})
+        await dp.start_polling(bot, allowed_updates=sorted(allowed_updates))
     finally:
         await bot.session.close()
         close_db()

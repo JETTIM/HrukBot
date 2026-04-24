@@ -286,6 +286,42 @@ def try_generate_roast(
     )
 
 
+def try_generate_reaction_reply(
+    *,
+    emoji: str,
+    message_text: str,
+    backend: str,
+    model: str,
+    endpoint: str,
+    timeout: float,
+) -> str | None:
+    emoji = emoji.strip()
+    message_text = message_text.strip()
+    if not emoji:
+        return None
+
+    return _try_generate_plain_text(
+        backend=backend,
+        model=model,
+        endpoint=endpoint,
+        timeout=timeout,
+        system_prompt=(
+            "Ты дерзкий Telegram-бот. "
+            "Сформируй короткую реплику на реакцию пользователя к сообщению. "
+            "Стиль: колко, иронично, по-чатовому. "
+            "Без markdown, без рассуждений, без угроз, без hate speech."
+        ),
+        user_prompt=(
+            f"Поставили реакцию: {emoji}\n"
+            f"Текст сообщения (если есть): {message_text[:400] or '(пусто)'}\n\n"
+            "Верни ОДНУ короткую реплику до 10 слов."
+        ),
+        temperature=0.75,
+        max_tokens=80,
+        max_chars=160,
+    )
+
+
 def try_answer_question(
     question: str,
     *,
