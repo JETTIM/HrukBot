@@ -11,7 +11,7 @@ from html import escape
 from aiogram import Bot, Dispatcher, Router
 from aiogram.client.default import DefaultBotProperties
 from aiogram.filters import Command
-from aiogram.types import Message
+from aiogram.types import Message, MessageReactionUpdated
 
 from app.config import get_settings
 from app.db import (
@@ -51,12 +51,14 @@ _last_cleanup_ts: float = 0.0
 _messages_since_svin_reply = 10
 _image_processing_semaphore: asyncio.Semaphore | None = None
 _svin_reply_chance = 0.03
+_last_reaction_reply_ts: float = 0.0
 PENDING_TEXT = "⏳ ща напишу..."
 PENDING_MIN_SECONDS = 1.0
 SHORT_MEMORY_MESSAGES = 10
 VISUAL_CONTEXT_WAIT_SECONDS = 3.0
 VISUAL_CONTEXT_POLL_SECONDS = 0.5
 ENABLE_VISUAL_FEATURES = False
+REACTION_REPLY_COOLDOWN_SECONDS = 20.0
 
 
 def _detect_message_type(message: Message) -> str:
@@ -118,6 +120,17 @@ def _should_try_svin_reply(today_messages_count: int) -> bool:
         and _messages_since_svin_reply >= 10
         and random.random() < _svin_reply_chance
     )
+
+
+def _extract_reaction_emojis(reactions: object) -> set[str]:
+    if not isinstance(reactions, list):
+        return set()
+    emojis: set[str] = set()
+    for item in reactions:
+        emoji = getattr(item, "emoji", None)
+        if isinstance(emoji, str) and emoji:
+            emojis.add(emoji)
+    return emojis
 
 
 def _extract_command_args(message: Message) -> str:
@@ -599,7 +612,7 @@ def _build_question_with_context(
         return question
     parts = [
         "Пользователь спрашивает в Telegram-чате.",
-        "Ответь на русском, коротко и по делу.",
+        "Ответь на русском, коротко, дерзко и с лёгким троллингом.",
         "Не обращайся к пользователю по имени, если он сам не представился в текущем сообщении.",
         f"Вопрос пользователя: {question}",
     ]
@@ -1415,6 +1428,36 @@ async def main() -> None:
             await _finish_pending(pending_message, pending_started, "Не смогла сделать прожарку, попробуй ещё раз.")
             return
         await _finish_pending(pending_message, pending_started, escape(_normalize_llm_text_block(roast, max_lines=2)))
+
+    @router.message_reaction()
+    async def on_message_reaction(update: MessageReactionUpdated) -> None:
+        if update.chat.id != settings.allowed_chat_id:
+            return
+
+        emojis = _extract_reaction_emojis(getattr(update, "new_reaction", None))
+        if "🤡" not in emojis:
+            return
+
+        global _last_reaction_reply_ts
+        now_ts = time.time()
+        if now_ts - _last_reaction_reply_ts < REACTION_REPLY_COOLDOWN_SECONDS:
+            return
+
+        _last_reaction_reply_ts = now_ts
+        roast_text = random.choice((
+            "ты ахуел?",
+            "🤡 засчитан, базар фильтруй.",
+            "клоун-реакция принята, штраф по уважению.",
+        ))
+        try:
+            await bot.send_message(
+                chat_id=update.chat.id,
+                text=escape(roast_text),
+                reply_to_message_id=update.message_id,
+                disable_notification=True,
+            )
+        except Exception:
+            logger.exception("Failed to send clown reaction reply")
 
     @router.message()
     async def on_message(message: Message) -> None:
