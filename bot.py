@@ -973,6 +973,22 @@ def _format_visual_memory(limit: int = 8) -> str:
     return "\n".join(lines)
 
 
+def _format_media_requirements() -> str:
+    return (
+        "🎞 Текущая поддержка медиа:\n"
+        "— фото/GIF/image-файлы: да\n"
+        "— видео: только превью-кадр (thumbnail)\n"
+        "— voice: пока нет\n\n"
+        "Чтобы добавить full video + звук (и не убить VPS):\n"
+        "1) ffmpeg для извлечения кадров/аудио;\n"
+        "2) OCR по кадрам (например, 1 кадр в 2-3 сек) + дедупликация;\n"
+        "3) ASR (faster-whisper/whisper.cpp) для voice и аудиодорожки видео;\n"
+        "4) лимиты: видео до 90 сек, voice до 600 сек;\n"
+        "5) очередь задач + rate-limit, иначе бот будет лагать.\n\n"
+        "Если хочешь, можно включить это по feature-flag в отдельном lightweight режиме."
+    )
+
+
 async def main() -> None:
     global _image_processing_semaphore, ENABLE_VISUAL_FEATURES
     settings = get_settings()
@@ -1297,6 +1313,14 @@ async def main() -> None:
         )
         await message.answer(escape(text), disable_notification=True)
 
+    @router.message(Command("mediahelp"))
+    async def on_mediahelp(message: Message) -> None:
+        if message.chat.id != settings.allowed_chat_id:
+            return
+        _log_incoming_command(message)
+        await _safe_delete_command_message(bot, message)
+        await message.answer(escape(_format_media_requirements()), disable_notification=True)
+
     @router.message(Command("roast"))
     async def on_roast(message: Message) -> None:
         if message.chat.id != settings.allowed_chat_id:
@@ -1343,6 +1367,7 @@ async def main() -> None:
             "/seen",
             "/chance",
             "/llmroute",
+            "/mediahelp",
             "/roast",
         )):
             return
