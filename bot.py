@@ -276,6 +276,12 @@ def _is_emoji_only_text(text: str) -> bool:
     return not any(ch.isalnum() for ch in stripped)
 
 
+def _should_ignore_addressed_reply(*, text_content: str, message_type: str) -> bool:
+    if text_content.strip():
+        return False
+    return message_type in {"sticker", "photo", "video", "animation", "voice", "document", "other"}
+
+
 def _normalize_reply_question(question: str, reply_text_context: str | None) -> str:
     if not _is_low_info_question(question):
         return question
@@ -1583,6 +1589,14 @@ async def main() -> None:
         if addressed_to_bot:
             if not settings.use_llm_topics:
                 await message.reply("LLM сейчас выключена.", disable_notification=True)
+                return
+            if _should_ignore_addressed_reply(text_content=text_content, message_type=message_type):
+                logger.info(
+                    "Ignoring non-text reply to bot: chat_id=%s message_id=%s type=%s",
+                    message.chat.id,
+                    message.message_id,
+                    message_type,
+                )
                 return
 
             question_raw = _strip_bot_mention(text_content, bot_info.username)

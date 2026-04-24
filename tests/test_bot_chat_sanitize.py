@@ -9,6 +9,7 @@ from bot import (
     _looks_like_meta_llm_line,
     _looks_like_rewrite_refusal,
     _needs_rewrite_or_retry,
+    _should_ignore_addressed_reply,
     _sanitize_chat_answer,
 )
 
@@ -141,3 +142,11 @@ def test_is_emoji_only_text_detects_single_emoji() -> None:
 
 def test_is_emoji_only_text_rejects_normal_text() -> None:
     assert _is_emoji_only_text("чо думаешь") is False
+
+
+def test_should_ignore_addressed_reply_for_sticker_without_text() -> None:
+    assert _should_ignore_addressed_reply(text_content="", message_type="sticker") is True
+
+
+def test_should_ignore_addressed_reply_for_text_message_is_false() -> None:
+    assert _should_ignore_addressed_reply(text_content="ну че", message_type="text") is False
