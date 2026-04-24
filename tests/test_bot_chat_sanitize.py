@@ -6,6 +6,7 @@ from bot import (
     _finalize_chat_answer,
     _looks_like_meta_llm_line,
     _looks_like_rewrite_refusal,
+    _needs_rewrite_or_retry,
     _sanitize_chat_answer,
 )
 
@@ -82,3 +83,7 @@ def test_finalize_chat_answer_rejects_reupload_request_for_photo_context() -> No
         settings=_Settings(),
     )
     assert result == "По фото пока не очень понятно, уточни что именно разобрать."
+
+
+def test_needs_rewrite_or_retry_detects_reasoning_marker() -> None:
+    assert _needs_rewrite_or_retry("Select the best option: Keep") is True
