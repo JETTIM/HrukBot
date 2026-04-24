@@ -18,3 +18,14 @@ def test_build_question_with_context_discourages_name_greetings() -> None:
     )
     assert "Не обращайся к пользователю по имени" in prompt
     assert "Сообщение из чата: Привет, меня зовут Alex" in prompt
+
+
+def test_build_question_with_context_keeps_short_memory_with_visual_context() -> None:
+    prompt = _build_question_with_context(
+        "что думаешь?",
+        visual_context="OCR текст: пример",
+        reply_text_context=None,
+        short_memory="Сообщение из чата: там на картинке лицо",
+    )
+    assert "Короткая память последних сообщений чата" in prompt
+    assert "Не говори, что картинка не прислана" in prompt
