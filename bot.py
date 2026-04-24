@@ -395,7 +395,13 @@ def _format_reply_visual_status(message: Message) -> str:
         return "Визуальная обработка временно отключена."
     reply = _find_visual_source_message(message, include_self=False)
     if not reply:
-        return "Ответь командой /seen на картинку, GIF или image-файл."
+        direct_reply = message.reply_to_message
+        if direct_reply and direct_reply.voice:
+            return (
+                "Voice-сообщения пока не поддерживаются в /seen.\n"
+                "Сейчас можно проверять только фото, GIF, video-thumb и image-файлы."
+            )
+        return "Ответь командой /seen на фото, GIF, видео или image-файл."
 
     event = get_image_event_by_message(chat_id=reply.chat.id, message_id=reply.message_id)
     if not event:
@@ -431,7 +437,9 @@ def _format_reply_visual_status(message: Message) -> str:
     elif summary_text:
         lines.append(f"— OCR/label: {summary_text}")
     else:
-        lines.append("— описание: пока нет")
+        lines.append("— описание: пока нет (в файле не нашли уверенный OCR/label)")
+        if status == "processed":
+            lines.append("— примечание: это нормально для новых/немых файлов, label появится после повторов")
     if processed_at:
         lines.append(f"— обработан: {processed_at}")
 
@@ -583,7 +591,8 @@ def _build_question_with_context(
         )
     elif short_memory:
         parts.append(
-            "Короткий контекст последних сообщений. Используй его только если он помогает понять вопрос:\n"
+            "Короткая память последних сообщений чата. Используй её только чтобы понять контекст текущей реплики. "
+            "Не пересказывай память и не анализируй сообщения:\n"
             f"{short_memory}"
         )
     if reply_text_context:
@@ -849,6 +858,26 @@ def _is_usable_chat_answer(
     return True
 
 
+def _needs_rewrite_or_retry(text: str) -> bool:
+    normalized = (text or "").strip()
+    if len(normalized) < 3:
+        return True
+    lowered = " ".join(normalized.lower().split())
+    bad_markers = (
+        "thinking process",
+        "analyze the request",
+        "analyze the context",
+        "draft response",
+        "select the best option",
+        "review constraints",
+        "determine the required response",
+        "chain of thought",
+        "reasoning:",
+        "<think>",
+    )
+    return any(marker in lowered for marker in bad_markers)
+
+
 def _looks_like_photo_question(question: str) -> bool:
     lowered = " ".join(question.lower().split())
     photo_markers = ("фото", "фотке", "картинк", "изображен", "скрин", "на снимке", "на фото")
@@ -872,7 +901,7 @@ def _finalize_chat_answer(
 ) -> str:
     looks_like_photo_question = _looks_like_photo_question(question)
     sanitized_primary = _sanitize_chat_answer(primary_answer)
-    if _is_usable_chat_answer(
+    if not _needs_rewrite_or_retry(sanitized_primary) and _is_usable_chat_answer(
         sanitized_primary,
         looks_like_photo_question=looks_like_photo_question,
         has_visual_context=has_visual_context,
@@ -881,7 +910,7 @@ def _finalize_chat_answer(
 
     rewritten = _maybe_rewrite_chat_answer(primary_answer, settings)
     sanitized_rewritten = _sanitize_chat_answer(rewritten)
-    if _is_usable_chat_answer(
+    if not _needs_rewrite_or_retry(sanitized_rewritten) and _is_usable_chat_answer(
         sanitized_rewritten,
         looks_like_photo_question=looks_like_photo_question,
         has_visual_context=has_visual_context,
