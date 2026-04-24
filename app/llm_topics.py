@@ -199,7 +199,8 @@ def try_generate_mood_summary(
         timeout=timeout,
         system_prompt=(
             "Оцени настроение и активность Telegram-чата. "
-            "Ответь по-русски очень кратко, 2-3 короткими строками, без markdown и без рассуждений."
+            "Ответь по-русски очень кратко, 2-3 короткими строками, без markdown и без рассуждений. "
+            "Только финальный ответ."
         ),
         user_prompt=(
             "На основе краткой выжимки оцени:\n"
@@ -234,7 +235,7 @@ def try_generate_svin_comment(
             "Ты отвечаешь как дерзкий Telegram-бот. "
             "Стиль: колко, язвительно, с прожаркой. "
             "Без угроз, без призывов к насилию, без hate speech. "
-            "Одна короткая фраза на русском, без объяснений."
+            "Одна короткая фраза на русском, без объяснений и без рассуждений."
         ),
         user_prompt=(
             "Это сообщение из Telegram-чата.\n\n"
@@ -277,7 +278,7 @@ def try_generate_roast(
         ),
         user_prompt=(
             f"Сделай короткую прожарку пользователя {target}.\n"
-            "1-2 строки на русском, без markdown."
+            "1-2 строки на русском, без markdown и без рассуждений."
         ),
         temperature=0.9,
         max_tokens=180,
@@ -303,9 +304,12 @@ def try_answer_question(
         endpoint=endpoint,
         timeout=timeout,
         system_prompt=(
-            "Ты отвечаешь на вопросы в маленьком Telegram-чате. "
-            "Пиши на русском, кратко и понятно. "
-            "Допускается легкая ирония, но без угроз и без hate speech. "
+            "Ты отвечаешь в маленьком Telegram-чате. "
+            "Пиши только финальную реплику на русском. "
+            "Не показывай рассуждения, анализ, план, варианты ответа или Thinking Process. "
+            "Не используй слова Thinking Process, Draft response, Analyze, Final Answer. "
+            "Ответ: 1-2 коротких предложения. "
+            "Можно с лёгкой иронией, но без угроз и hate speech. "
             "Без markdown."
         ),
         user_prompt=question[:1500],
@@ -336,7 +340,7 @@ def try_rewrite_assistant_answer(
             "Ты редактор текста для Telegram-чата. "
             "Перефразируй текст естественно и кратко, без отказов и без метакомментариев. "
             "Удали служебный мусор вроде Attempt/Context. "
-            "Верни только итоговый ответ на русском, 1-3 предложения, без markdown."
+            "Верни только итоговый ответ на русском, 1-3 предложения, без markdown и без рассуждений."
         ),
         user_prompt=(
             "Перепиши этот текст в нормальный чатовый ответ:\n\n"
@@ -374,7 +378,7 @@ def try_prepare_visual_task(
         user_prompt=(
             "Вопрос пользователя про картинку:\n"
             f"{question[:600]}\n\n"
-            "Верни только краткую задачу для модели-исполнителя."
+            "Верни только краткую задачу для модели-исполнителя без рассуждений."
         ),
         temperature=0.15,
         max_tokens=120,
@@ -440,13 +444,29 @@ def _try_generate_plain_text(
         ],
         "temperature": temperature,
         "max_tokens": max_tokens,
+        "chat_template_kwargs": {"enable_thinking": False},
     }
 
     try:
         text = _call_llama_cpp_with_retries(endpoint=endpoint, payload=payload, timeout=timeout)
     except HTTPError as exc:
-        logger.exception("LLM plain text request failed: %s", _read_http_error(exc))
-        return None
+        if exc.code not in {400, 422}:
+            logger.exception("LLM plain text request failed: %s", _read_http_error(exc))
+            return None
+        logger.warning(
+            "LLM plain text endpoint rejected chat_template_kwargs, retrying without it: %s",
+            _read_http_error(exc),
+        )
+        fallback_payload = dict(payload)
+        fallback_payload.pop("chat_template_kwargs", None)
+        try:
+            text = _call_llama_cpp_with_retries(endpoint=endpoint, payload=fallback_payload, timeout=timeout)
+        except HTTPError as retry_exc:
+            logger.exception("LLM plain text retry failed: %s", _read_http_error(retry_exc))
+            return None
+        except (URLError, TimeoutError, OSError, ValueError, json.JSONDecodeError):
+            logger.exception("LLM plain text retry failed")
+            return None
     except (URLError, TimeoutError, OSError, ValueError, json.JSONDecodeError):
         logger.exception("LLM plain text request failed")
         return None
@@ -547,7 +567,9 @@ def _call_llama_cpp_with_retries(*, endpoint: str, payload: dict[str, Any], time
             raise
         except ValueError as exc:
             last_error = exc
-            if _is_empty_length_response_error(exc) and _shrink_payload_user_prompt(current_payload):
+            if _is_empty_length_response_error(exc) and (
+                _shrink_payload_user_prompt(current_payload) or _reduce_payload_max_tokens(current_payload)
+            ):
                 logger.warning(
                     "LLM returned truncated reasoning before final content, retrying with shorter prompt prompt_chars=%s max_tokens=%s",
                     _get_user_prompt_chars(current_payload),
@@ -807,27 +829,65 @@ def _sanitize_reasoning_output(text: str) -> str:
     if not _looks_like_reasoning_text(stripped):
         return stripped
 
+    final_answer = _extract_final_answer_from_reasoning(stripped)
+    if final_answer:
+        return final_answer
+
     option = _extract_best_draft_option(stripped)
     if option:
         return option
 
-    lines: list[str] = []
-    for raw in stripped.splitlines():
+    return ""
+
+
+def _extract_final_answer_from_reasoning(text: str) -> str | None:
+    markers = (
+        "Final Answer:",
+        "Answer:",
+        "Ответ:",
+        "Итог:",
+        "Итоговый ответ:",
+        "Финальный ответ:",
+    )
+    lines = text.splitlines()
+    for idx, raw in enumerate(lines):
         line = raw.strip().strip('"')
         if not line:
             continue
         lowered = line.lower()
-        if _looks_like_reasoning_text(line):
-            continue
-        if lowered.startswith("draft response options"):
-            continue
-        if re.match(r"^\d+\.\s", line):
-            continue
-        if line.startswith(("*", "-", "•")):
-            continue
-        lines.append(line)
+        for marker in markers:
+            marker_lower = marker.lower()
+            if lowered == marker_lower:
+                for follow in lines[idx + 1:]:
+                    candidate = follow.strip().strip('"')
+                    if _is_valid_final_answer_line(candidate):
+                        return candidate
+                continue
+            if lowered.startswith(marker_lower):
+                candidate = line[len(marker):].strip()
+                if _is_valid_final_answer_line(candidate):
+                    return candidate
+    return None
 
-    return lines[-1] if lines else ""
+
+def _is_valid_final_answer_line(line: str) -> bool:
+    if not line:
+        return False
+    lowered = " ".join(line.lower().split())
+    if _looks_like_reasoning_text(line):
+        return False
+    bad_prefixes = (
+        "draft response",
+        "select the best option",
+        "analyze",
+        "review constraints",
+        "determine the required response",
+    )
+    if lowered.startswith(bad_prefixes):
+        return False
+    if len(lowered) < 3:
+        return False
+    return any(ch.isalpha() for ch in line)
 
 
 def _extract_best_draft_option(text: str) -> str | None:
@@ -843,6 +903,9 @@ def _extract_best_draft_option(text: str) -> str | None:
         if len(value) < 4:
             continue
         if _looks_like_reasoning_text(value):
+            continue
+        lowered = " ".join(value.lower().split())
+        if lowered.startswith("select the best option"):
             continue
         if not any(ch.isalpha() for ch in value):
             continue

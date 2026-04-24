@@ -4,8 +4,10 @@ from bot import (
     _asks_for_photo_upload,
     _chat_fallback_answer,
     _finalize_chat_answer,
+    _format_reply_visual_status,
     _looks_like_meta_llm_line,
     _looks_like_rewrite_refusal,
+    _needs_rewrite_or_retry,
     _sanitize_chat_answer,
 )
 
@@ -82,3 +84,24 @@ def test_finalize_chat_answer_rejects_reupload_request_for_photo_context() -> No
         settings=_Settings(),
     )
     assert result == "По фото пока не очень понятно, уточни что именно разобрать."
+
+
+def test_needs_rewrite_or_retry_detects_reasoning_marker() -> None:
+    assert _needs_rewrite_or_retry("Select the best option: Keep") is True
+
+
+def test_format_reply_visual_status_reports_voice_as_unsupported(monkeypatch) -> None:
+    class _Voice:
+        pass
+
+    class _Reply:
+        voice = _Voice()
+
+    class _Message:
+        reply_to_message = _Reply()
+
+    monkeypatch.setattr("bot.ENABLE_VISUAL_FEATURES", True)
+    monkeypatch.setattr("bot._find_visual_source_message", lambda message, include_self: None)
+
+    status = _format_reply_visual_status(_Message())
+    assert "Voice-сообщения пока не поддерживаются" in status

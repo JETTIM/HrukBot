@@ -115,8 +115,9 @@ LLM_TIMEOUT=10
 - `/svin` — просит локальную LLM сочинить короткий анекдот про свинью. Если LLM недоступна, команда просто ничего не отправляет.
 - `/ask вопрос` — задает простой вопрос локальной LLM. Если LLM выключена или недоступна, бот отвечает коротким сообщением об этом.
 - `/visual` — показывает топ визуальных кластеров: id, краткий label и количество повторов.
-- `/seen` — показывает статус обработки картинки/GIF/image-файла в reply-сообщении.
+- `/seen` — показывает статус обработки фото/GIF/видео-превью/image-файла в reply-сообщении.
 - `/llmroute` — показывает, какая модель/endpoint используются как primary и rewrite для чатовых ответов.
+- `/mediahelp` — показывает, что уже поддерживается по медиа и что нужно для full video/audio пайплайна.
 
 ## Случайный "свин"
 
@@ -293,6 +294,10 @@ GIF support note:
 - Telegram `animation` messages are handled through their thumbnail when Telegram provides one.
 - This keeps GIF recognition lightweight and avoids adding ffmpeg or a heavy video pipeline.
 - If Telegram sends an animation without a thumbnail, the bot stores the normal message but skips visual hashing for that file.
+
+Video/voice note:
+- Telegram `video` messages are handled via their thumbnail (preview frame), not by full video decoding.
+- Voice messages are not processed by `/seen` (no ASR pipeline in this project right now).
 
 Visual safety/context notes:
 - `MAX_IMAGE_FILE_SIZE_MB` limits media downloads before processing, so very large image documents are skipped safely.
