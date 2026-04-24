@@ -70,6 +70,10 @@ def get_visual_file_info(message: Message) -> tuple[str, int | None] | None:
         if message.animation.thumbnail:
             return message.animation.thumbnail.file_id, message.animation.thumbnail.file_size
         return message.animation.file_id, message.animation.file_size
+    if message.video:
+        if message.video.thumbnail:
+            return message.video.thumbnail.file_id, message.video.thumbnail.file_size
+        return None
     if message.document and message.document.mime_type:
         if message.document.mime_type.startswith("image/"):
             return message.document.file_id, message.document.file_size

@@ -189,6 +189,25 @@ def get_messages_by_day(day_value: date | datetime | str) -> list[dict[str, Any]
     return [dict(row) for row in rows]
 
 
+def get_message_text_by_chat_message(*, chat_id: int, message_id: int) -> str | None:
+    conn = _require_connection()
+    row = conn.execute(
+        """
+        SELECT text
+        FROM messages
+        WHERE chat_id = ?
+          AND message_id = ?
+        ORDER BY id DESC
+        LIMIT 1
+        """,
+        (chat_id, message_id),
+    ).fetchone()
+    if not row:
+        return None
+    value = row["text"]
+    return str(value).strip() if value is not None else None
+
+
 def delete_messages_older_than(days: int) -> int:
     """Delete rows older than N days and return affected row count."""
     if days < 0:
