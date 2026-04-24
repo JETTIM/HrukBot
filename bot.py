@@ -396,12 +396,27 @@ def _format_reply_visual_status(message: Message) -> str:
     reply = _find_visual_source_message(message, include_self=False)
     if not reply:
         direct_reply = message.reply_to_message
-        if direct_reply and direct_reply.voice:
+        if direct_reply and direct_reply.video:
+            duration = int(getattr(direct_reply.video, "duration", 0) or 0)
+            size_kb = int((getattr(direct_reply.video, "file_size", 0) or 0) // 1024)
             return (
-                "Voice-сообщения пока не поддерживаются в /seen.\n"
-                "Сейчас можно проверять только фото, GIF, video-thumb и image-файлы."
+                "Проверка файла:\n"
+                "— тип: video\n"
+                f"— длительность: ~{duration} сек\n"
+                f"— размер: ~{size_kb} KB\n"
+                "— статус: не изучен (у видео нет превью-кадра для визуального hash/OCR)"
             )
-        return "Ответь командой /seen на фото, GIF, видео или image-файл."
+        if direct_reply and direct_reply.voice:
+            duration = int(getattr(direct_reply.voice, "duration", 0) or 0)
+            size_kb = int((getattr(direct_reply.voice, "file_size", 0) or 0) // 1024)
+            return (
+                "Проверка файла:\n"
+                "— тип: voice\n"
+                f"— длительность: ~{duration} сек\n"
+                f"— размер: ~{size_kb} KB\n"
+                "— статус: изучение voice пока не включено (нет ASR-пайплайна)"
+            )
+        return "Ответь командой /seen на фото, GIF, видео, voice или image-файл."
 
     event = get_image_event_by_message(chat_id=reply.chat.id, message_id=reply.message_id)
     if not event:
@@ -419,6 +434,19 @@ def _format_reply_visual_status(message: Message) -> str:
     processed_at = str(event.get("processed_at") or "").strip()
 
     lines = ["Проверка файла:"]
+    if reply.video:
+        duration = int(getattr(reply.video, "duration", 0) or 0)
+        lines.append("— тип: video (preview-thumb)")
+        lines.append(f"— длительность: ~{duration} сек")
+    elif reply.voice:
+        duration = int(getattr(reply.voice, "duration", 0) or 0)
+        lines.append("— тип: voice")
+        lines.append(f"— длительность: ~{duration} сек")
+    elif reply.animation:
+        lines.append("— тип: gif/animation")
+    elif reply.photo:
+        lines.append("— тип: photo")
+
     if status == "processed":
         lines.append("— статус: изучен")
     elif status == "failed":
@@ -1254,6 +1282,40 @@ async def main() -> None:
             return
         await _finish_pending(pending_message, pending_started, escape(status_text))
 
+    @router.message(Command("relearn"))
+    async def on_relearn(message: Message) -> None:
+        if message.chat.id != settings.allowed_chat_id:
+            return
+        _log_incoming_command(message)
+        await _safe_delete_command_message(bot, message)
+
+        source = _find_visual_source_message(message, include_self=False)
+        reply = message.reply_to_message
+        if source is None:
+            if reply and reply.voice:
+                await message.answer(
+                    "Voice пока нельзя отправить на переизучение: ASR-пайплайн ещё не включён.",
+                    disable_notification=True,
+                )
+                return
+            if reply and reply.video:
+                await message.answer(
+                    "У этого видео нет preview-thumbnail для повторного визуального изучения.",
+                    disable_notification=True,
+                )
+                return
+            await message.answer(
+                "Ответь /relearn на фото, GIF, видео с preview-thumbnail или image-файл.",
+                disable_notification=True,
+            )
+            return
+
+        asyncio.create_task(_process_message_image_limited(bot, source, settings=settings))
+        await message.answer(
+            "Запустила повторное изучение файла. Проверь /seen через пару секунд.",
+            disable_notification=True,
+        )
+
     @router.message(Command("chance"))
     async def on_chance(message: Message) -> None:
         if message.chat.id != settings.allowed_chat_id:
@@ -1370,6 +1432,7 @@ async def main() -> None:
             "/ask",
             "/visual",
             "/seen",
+            "/relearn",
             "/chance",
             "/llmroute",
             "/mediahelp",

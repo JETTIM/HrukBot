@@ -96,10 +96,12 @@ def test_needs_rewrite_or_retry_detects_reasoning_marker() -> None:
 
 def test_format_reply_visual_status_reports_voice_as_unsupported(monkeypatch) -> None:
     class _Voice:
-        pass
+        duration = 123
+        file_size = 456000
 
     class _Reply:
         voice = _Voice()
+        video = None
 
     class _Message:
         reply_to_message = _Reply()
@@ -108,4 +110,25 @@ def test_format_reply_visual_status_reports_voice_as_unsupported(monkeypatch) ->
     monkeypatch.setattr("bot._find_visual_source_message", lambda message, include_self: None)
 
     status = _format_reply_visual_status(_Message())
-    assert "Voice-сообщения пока не поддерживаются" in status
+    assert "тип: voice" in status
+    assert "изучение voice пока не включено" in status
+
+
+def test_format_reply_visual_status_reports_video_without_thumbnail(monkeypatch) -> None:
+    class _Video:
+        duration = 89
+        file_size = 1024 * 512
+
+    class _Reply:
+        voice = None
+        video = _Video()
+
+    class _Message:
+        reply_to_message = _Reply()
+
+    monkeypatch.setattr("bot.ENABLE_VISUAL_FEATURES", True)
+    monkeypatch.setattr("bot._find_visual_source_message", lambda message, include_self: None)
+
+    status = _format_reply_visual_status(_Message())
+    assert "тип: video" in status
+    assert "у видео нет превью-кадра" in status
