@@ -105,18 +105,22 @@ LLM_TIMEOUT=10
 
 ## Команды бота
 
-Команды работают только в разрешенном `ALLOWED_CHAT_ID`.
+Все команды работают только в `ALLOWED_CHAT_ID`.
 
-- `/stats` — отчет на текущий момент за сегодня.
-- `/dead` — сравнение активности сегодня и вчера.
-- `/time` — примерная оценка времени, потраченного на переписку сегодня.
-- `/when` — самый активный и самый тихий час за сегодня.
-- `/mood` — краткая оценка характера обсуждения. При `USE_LLM_TOPICS=true` использует LLM, иначе возвращает простой fallback: активный/умеренный/тихий чат.
-- `/svin` — просит локальную LLM сочинить короткий анекдот про свинью. Если LLM недоступна, команда просто ничего не отправляет.
-- `/ask вопрос` — задает простой вопрос локальной LLM. Если LLM выключена или недоступна, бот отвечает коротким сообщением об этом.
-- `/visual` — показывает топ визуальных кластеров: id, краткий label и количество повторов.
-- `/seen` — показывает статус обработки картинки/GIF/image-файла в reply-сообщении.
-- `/llmroute` — показывает, какая модель/endpoint используются как primary и rewrite для чатовых ответов.
+- `/stats` — статистика чата за сегодня (на текущий момент).
+- `/dead` — насколько чат просел относительно вчера.
+- `/time` — примерная суммарная «вовлечённость во время» по числу сообщений за сегодня.
+- `/when` — пик и самый тихий час активности за сегодня.
+- `/mood` — короткая сводка характера обсуждения (LLM при `USE_LLM_TOPICS=true`, иначе fallback).
+- `/svin` — короткий ироничный анекдот про свинью.
+- `/ask <вопрос>` — вопрос локальной LLM с учётом контекста.
+- `/roast @username` — прожарка пользователя в 1-2 строках.
+- `/chance [+, -, число]` — посмотреть/изменить шанс случайного «свин»-комментария.
+- `/llmroute` — показать текущий маршрут primary/rewrite модели.
+- `/visual` — топ визуальных кластеров (id, label, количество повторов).
+- `/seen` — статус обработки reply-медиа: фото/GIF/video-preview/image; для voice показывает метаданные и статус ASR.
+- `/relearn` — запустить повторное изучение reply-файла (фото/GIF/video-preview/image).
+- `/mediahelp` — что сейчас поддерживается по медиа и что нужно для full video/audio пайплайна.
 
 ## Случайный "свин"
 
@@ -293,6 +297,10 @@ GIF support note:
 - Telegram `animation` messages are handled through their thumbnail when Telegram provides one.
 - This keeps GIF recognition lightweight and avoids adding ffmpeg or a heavy video pipeline.
 - If Telegram sends an animation without a thumbnail, the bot stores the normal message but skips visual hashing for that file.
+
+Video/voice note:
+- Telegram `video` messages are handled via their thumbnail (preview frame), not by full video decoding.
+- Voice messages are not processed by `/seen` (no ASR pipeline in this project right now).
 
 Visual safety/context notes:
 - `MAX_IMAGE_FILE_SIZE_MB` limits media downloads before processing, so very large image documents are skipped safely.

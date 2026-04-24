@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
+from types import SimpleNamespace
 
 from app import images
 
@@ -64,3 +65,15 @@ def test_extract_ocr_text_handles_wrapped_missing_binary_error(monkeypatch, capl
 
     warnings = [rec.message for rec in caplog.records if rec.levelno >= logging.WARNING]
     assert "OCR disabled: tesseract binary not found in PATH" in warnings
+
+
+def test_get_visual_file_info_uses_video_thumbnail() -> None:
+    message = SimpleNamespace(
+        photo=None,
+        animation=None,
+        video=SimpleNamespace(
+            thumbnail=SimpleNamespace(file_id="thumb_1", file_size=12345),
+        ),
+        document=None,
+    )
+    assert images.get_visual_file_info(message) == ("thumb_1", 12345)

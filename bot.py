@@ -395,7 +395,28 @@ def _format_reply_visual_status(message: Message) -> str:
         return "Визуальная обработка временно отключена."
     reply = _find_visual_source_message(message, include_self=False)
     if not reply:
-        return "Ответь командой /seen на картинку, GIF или image-файл."
+        direct_reply = message.reply_to_message
+        if direct_reply and direct_reply.video:
+            duration = int(getattr(direct_reply.video, "duration", 0) or 0)
+            size_kb = int((getattr(direct_reply.video, "file_size", 0) or 0) // 1024)
+            return (
+                "Проверка файла:\n"
+                "— тип: video\n"
+                f"— длительность: ~{duration} сек\n"
+                f"— размер: ~{size_kb} KB\n"
+                "— статус: не изучен (у видео нет превью-кадра для визуального hash/OCR)"
+            )
+        if direct_reply and direct_reply.voice:
+            duration = int(getattr(direct_reply.voice, "duration", 0) or 0)
+            size_kb = int((getattr(direct_reply.voice, "file_size", 0) or 0) // 1024)
+            return (
+                "Проверка файла:\n"
+                "— тип: voice\n"
+                f"— длительность: ~{duration} сек\n"
+                f"— размер: ~{size_kb} KB\n"
+                "— статус: изучение voice пока не включено (нет ASR-пайплайна)"
+            )
+        return "Ответь командой /seen на фото, GIF, видео, voice или image-файл."
 
     event = get_image_event_by_message(chat_id=reply.chat.id, message_id=reply.message_id)
     if not event:
@@ -413,6 +434,19 @@ def _format_reply_visual_status(message: Message) -> str:
     processed_at = str(event.get("processed_at") or "").strip()
 
     lines = ["Проверка файла:"]
+    if reply.video:
+        duration = int(getattr(reply.video, "duration", 0) or 0)
+        lines.append("— тип: video (preview-thumb)")
+        lines.append(f"— длительность: ~{duration} сек")
+    elif reply.voice:
+        duration = int(getattr(reply.voice, "duration", 0) or 0)
+        lines.append("— тип: voice")
+        lines.append(f"— длительность: ~{duration} сек")
+    elif reply.animation:
+        lines.append("— тип: gif/animation")
+    elif reply.photo:
+        lines.append("— тип: photo")
+
     if status == "processed":
         lines.append("— статус: изучен")
     elif status == "failed":
@@ -431,7 +465,9 @@ def _format_reply_visual_status(message: Message) -> str:
     elif summary_text:
         lines.append(f"— OCR/label: {summary_text}")
     else:
-        lines.append("— описание: пока нет")
+        lines.append("— описание: пока нет (в файле не нашли уверенный OCR/label)")
+        if status == "processed":
+            lines.append("— примечание: это нормально для новых/немых файлов, label появится после повторов")
     if processed_at:
         lines.append(f"— обработан: {processed_at}")
 
@@ -579,11 +615,13 @@ def _build_question_with_context(
             "Дай 1-2 коротких осмысленных предложения по содержимому изображения. "
             "Скажи, что на ней изображено или в чём шутка/смысл, если это понятно по OCR/label/caption. "
             "Не отвечай слишком общими фразами вроде 'это ОИ', 'это картинка' или 'это мем'. "
-            "Можно с лёгкой иронией, но без выдумывания деталей, которых нет в OCR/label/caption."
+            "Можно с лёгкой иронией, но без выдумывания деталей, которых нет в OCR/label/caption. "
+            "Если данных недостаточно, честно скажи это и уточни, что именно разобрать."
         )
-    elif short_memory:
+    if short_memory:
         parts.append(
-            "Короткий контекст последних сообщений. Используй его только если он помогает понять вопрос:\n"
+            "Короткая память последних сообщений чата. Используй её только чтобы понять контекст текущей реплики. "
+            "Не пересказывай память и не анализируй сообщения:\n"
             f"{short_memory}"
         )
     if reply_text_context:
@@ -591,7 +629,9 @@ def _build_question_with_context(
     if visual_context:
         parts.append(
             "Если вопрос относится к картинке, используй только сохранённый визуальный контекст ниже. "
-            "Не утверждай, что видишь изображение напрямую.\n"
+            "Не утверждай, что видишь изображение напрямую. "
+            "Не говори, что картинка не прислана, если визуальный контекст уже есть. "
+            "Если по контексту недостаточно данных, так и скажи и попроси уточнить, что именно разобрать.\n"
             f"Визуальный контекст изображения:\n{visual_context}"
         )
     return "\n\n".join(parts)
@@ -829,6 +869,8 @@ def _asks_for_photo_upload(text: str) -> bool:
         "отправь фото",
         "send the image",
         "send me the photo",
+        "картинка не прислана",
+        "изображение не прислано",
     )
     return any(marker in lowered for marker in markers)
 
@@ -847,6 +889,26 @@ def _is_usable_chat_answer(
     if looks_like_photo_question and has_visual_context and _asks_for_photo_upload(normalized):
         return False
     return True
+
+
+def _needs_rewrite_or_retry(text: str) -> bool:
+    normalized = (text or "").strip()
+    if len(normalized) < 3:
+        return True
+    lowered = " ".join(normalized.lower().split())
+    bad_markers = (
+        "thinking process",
+        "analyze the request",
+        "analyze the context",
+        "draft response",
+        "select the best option",
+        "review constraints",
+        "determine the required response",
+        "chain of thought",
+        "reasoning:",
+        "<think>",
+    )
+    return any(marker in lowered for marker in bad_markers)
 
 
 def _looks_like_photo_question(question: str) -> bool:
@@ -872,7 +934,7 @@ def _finalize_chat_answer(
 ) -> str:
     looks_like_photo_question = _looks_like_photo_question(question)
     sanitized_primary = _sanitize_chat_answer(primary_answer)
-    if _is_usable_chat_answer(
+    if not _needs_rewrite_or_retry(sanitized_primary) and _is_usable_chat_answer(
         sanitized_primary,
         looks_like_photo_question=looks_like_photo_question,
         has_visual_context=has_visual_context,
@@ -881,7 +943,7 @@ def _finalize_chat_answer(
 
     rewritten = _maybe_rewrite_chat_answer(primary_answer, settings)
     sanitized_rewritten = _sanitize_chat_answer(rewritten)
-    if _is_usable_chat_answer(
+    if not _needs_rewrite_or_retry(sanitized_rewritten) and _is_usable_chat_answer(
         sanitized_rewritten,
         looks_like_photo_question=looks_like_photo_question,
         has_visual_context=has_visual_context,
@@ -942,6 +1004,22 @@ def _format_visual_memory(limit: int = 8) -> str:
         label = summary if summary else "пока без описания"
         lines.append(f"— #{cluster_id}: {label} ({usage_count} раз)")
     return "\n".join(lines)
+
+
+def _format_media_requirements() -> str:
+    return (
+        "🎞 Текущая поддержка медиа:\n"
+        "— фото/GIF/image-файлы: да\n"
+        "— видео: только превью-кадр (thumbnail)\n"
+        "— voice: пока нет\n\n"
+        "Чтобы добавить full video + звук (и не убить VPS):\n"
+        "1) ffmpeg для извлечения кадров/аудио;\n"
+        "2) OCR по кадрам (например, 1 кадр в 2-3 сек) + дедупликация;\n"
+        "3) ASR (faster-whisper/whisper.cpp) для voice и аудиодорожки видео;\n"
+        "4) лимиты: видео до 90 сек, voice до 600 сек;\n"
+        "5) очередь задач + rate-limit, иначе бот будет лагать.\n\n"
+        "Если хочешь, можно включить это по feature-flag в отдельном lightweight режиме."
+    )
 
 
 async def main() -> None:
@@ -1204,6 +1282,40 @@ async def main() -> None:
             return
         await _finish_pending(pending_message, pending_started, escape(status_text))
 
+    @router.message(Command("relearn"))
+    async def on_relearn(message: Message) -> None:
+        if message.chat.id != settings.allowed_chat_id:
+            return
+        _log_incoming_command(message)
+        await _safe_delete_command_message(bot, message)
+
+        source = _find_visual_source_message(message, include_self=False)
+        reply = message.reply_to_message
+        if source is None:
+            if reply and reply.voice:
+                await message.answer(
+                    "Voice пока нельзя отправить на переизучение: ASR-пайплайн ещё не включён.",
+                    disable_notification=True,
+                )
+                return
+            if reply and reply.video:
+                await message.answer(
+                    "У этого видео нет preview-thumbnail для повторного визуального изучения.",
+                    disable_notification=True,
+                )
+                return
+            await message.answer(
+                "Ответь /relearn на фото, GIF, видео с preview-thumbnail или image-файл.",
+                disable_notification=True,
+            )
+            return
+
+        asyncio.create_task(_process_message_image_limited(bot, source, settings=settings))
+        await message.answer(
+            "Запустила повторное изучение файла. Проверь /seen через пару секунд.",
+            disable_notification=True,
+        )
+
     @router.message(Command("chance"))
     async def on_chance(message: Message) -> None:
         if message.chat.id != settings.allowed_chat_id:
@@ -1268,6 +1380,14 @@ async def main() -> None:
         )
         await message.answer(escape(text), disable_notification=True)
 
+    @router.message(Command("mediahelp"))
+    async def on_mediahelp(message: Message) -> None:
+        if message.chat.id != settings.allowed_chat_id:
+            return
+        _log_incoming_command(message)
+        await _safe_delete_command_message(bot, message)
+        await message.answer(escape(_format_media_requirements()), disable_notification=True)
+
     @router.message(Command("roast"))
     async def on_roast(message: Message) -> None:
         if message.chat.id != settings.allowed_chat_id:
@@ -1312,8 +1432,10 @@ async def main() -> None:
             "/ask",
             "/visual",
             "/seen",
+            "/relearn",
             "/chance",
             "/llmroute",
+            "/mediahelp",
             "/roast",
         )):
             return
