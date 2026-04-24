@@ -5,6 +5,7 @@ from bot import (
     _chat_fallback_answer,
     _finalize_chat_answer,
     _format_reply_visual_status,
+    _is_emoji_only_text,
     _looks_like_meta_llm_line,
     _looks_like_rewrite_refusal,
     _needs_rewrite_or_retry,
@@ -132,3 +133,11 @@ def test_format_reply_visual_status_reports_video_without_thumbnail(monkeypatch)
     status = _format_reply_visual_status(_Message())
     assert "тип: video" in status
     assert "у видео нет превью-кадра" in status
+
+
+def test_is_emoji_only_text_detects_single_emoji() -> None:
+    assert _is_emoji_only_text("😭") is True
+
+
+def test_is_emoji_only_text_rejects_normal_text() -> None:
+    assert _is_emoji_only_text("чо думаешь") is False

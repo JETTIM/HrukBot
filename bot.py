@@ -267,6 +267,15 @@ def _is_low_info_question(text: str) -> bool:
     return cleaned in low_info_tokens
 
 
+def _is_emoji_only_text(text: str) -> bool:
+    stripped = (text or "").strip()
+    if not stripped:
+        return False
+    if len(stripped) > 8:
+        return False
+    return not any(ch.isalnum() for ch in stripped)
+
+
 def _normalize_reply_question(question: str, reply_text_context: str | None) -> str:
     if not _is_low_info_question(question):
         return question
@@ -1577,6 +1586,14 @@ async def main() -> None:
                 return
 
             question_raw = _strip_bot_mention(text_content, bot_info.username)
+            if _is_emoji_only_text(question_raw):
+                logger.info(
+                    "Ignoring emoji-only reply to bot: chat_id=%s message_id=%s text=%r",
+                    message.chat.id,
+                    message.message_id,
+                    question_raw,
+                )
+                return
             reply_text_context = _build_reply_text_context(message, bot_info.username, bot_info.id)
             question = _normalize_reply_question(question_raw, reply_text_context)
             if question.strip():
