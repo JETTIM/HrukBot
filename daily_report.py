@@ -108,6 +108,38 @@ def _is_summary_too_similar_to_topics(topics: list[str], summary_lines: list[str
     return equal_hits >= min(2, len(normalized_summary))
 
 
+def _sanitize_llm_summary_lines(topics: list[str], summary_lines: list[str]) -> list[str]:
+    topic_tokens = {topic.strip().lower() for topic in topics if topic.strip()}
+    forbidden_prefixes = (
+        "всего сообщений",
+        "топ участников",
+        "пик активности",
+        "черновые темы",
+        "основные темы",
+    )
+
+    cleaned: list[str] = []
+    for line in summary_lines:
+        normalized = " ".join(str(line).strip().split())
+        if not normalized:
+            continue
+
+        lowered = normalized.lower()
+        if lowered in topic_tokens:
+            continue
+        if lowered.startswith(forbidden_prefixes):
+            continue
+        if "=" in lowered and "топ" in lowered:
+            continue
+
+        if normalized not in cleaned:
+            cleaned.append(normalized)
+        if len(cleaned) >= 3:
+            break
+
+    return cleaned
+
+
 def build_topics_and_summary_lines(
     *,
     messages: list[dict[str, Any]],
@@ -159,8 +191,17 @@ def build_topics_and_summary_lines(
         logger.info("LLM topics used")
         used_llm = True
         topics, summary_lines = llm_result
+        summary_lines = _sanitize_llm_summary_lines(topics, summary_lines)
         if _is_summary_too_similar_to_topics(topics, summary_lines):
             logger.info("LLM summary duplicated topics; using rule-based character lines")
+            summary_lines = build_discussion_character(
+                stats=stats,
+                topics=topics,
+                user_names=user_names,
+                max_phrases=3,
+            )
+        if not summary_lines:
+            logger.info("LLM summary looked like stats/topics digest; using rule-based character lines")
             summary_lines = build_discussion_character(
                 stats=stats,
                 topics=topics,
